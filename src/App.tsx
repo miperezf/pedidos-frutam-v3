@@ -49,10 +49,13 @@ const db = getFirestore(app);
 //  v51.5 escape del Mail ID en el HTML del correo/preview y iframe del preview en sandbox
 //  v51.6 fondo translúcido de modales (Tailwind v4), detector de versión operativo,
 //        parser tolerante en envío/preview, localStorage seguro, limpieza de restos
-const APP_VERSION = "v51.6";
+//  v51.7 ruta base según el repositorio y aviso visible de entorno de pruebas
+const APP_VERSION = "v51.7";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v51";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
+// v51.7: etiqueta de entorno inyectada por vite.config.ts ("" en producción)
+const ENV_LABEL = typeof __ENV_LABEL__ !== "undefined" ? __ENV_LABEL__ : "";
 
 const InputField = React.forwardRef(
   (
@@ -3881,6 +3884,20 @@ const App = () => {
           >
             Actualizar
           </button>
+        </div>
+      )}
+
+      {/* ── v51.7: AVISO DE ENTORNO DE PRUEBAS (solo fuera de producción) ───── */}
+      {ENV_LABEL && (
+        <div
+          role="status"
+          style={{
+            position: "fixed", top: 0, left: 0, right: 0, zIndex: 10001,
+            background: "#b45309", color: "#fff", textAlign: "center",
+            fontSize: "12px", fontWeight: 700, padding: "3px 8px", letterSpacing: "0.02em",
+          }}
+        >
+          ENTORNO DE {ENV_LABEL} · base de datos: {firebaseConfig.projectId || "sin configurar"} · no usar para pedidos reales
         </div>
       )}
 
