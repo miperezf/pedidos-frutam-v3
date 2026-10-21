@@ -72,7 +72,9 @@ const db = getFirestore(app);
 //  v52.8 perfil y ajustes en panel lateral (como el historial); reloj solo con envíos;
 //        íconos de la barra más pequeños
 //  v52.9 campo Asunto con la misma altura que el resto
-const APP_VERSION = "v52.9";
+//  v53.0 números de pedido + "Agregar pedido" centrados sobre la tabla de ítems
+//        (Anterior / Pedido N de M / Siguiente se mantienen arriba)
+const APP_VERSION = "v53.0";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -3401,7 +3403,7 @@ const App = () => {
         ) : (
           <section className="rounded-2xl border border-line bg-surface shadow-xs">
             {/* v52.1: navegador de pedidos — pensado para Mail ID con 15+ pedidos */}
-            <div className="space-y-3 border-b border-line bg-surface-2 px-3 py-3 sm:px-5 rounded-t-2xl">
+            <div className="border-b border-line bg-surface-2 px-3 py-3 sm:px-5 rounded-t-2xl">
               <div className="flex items-center gap-2">
                 <Button
                   size="sm"
@@ -3440,44 +3442,6 @@ const App = () => {
                 </Button>
               </div>
 
-              <div className="flex flex-wrap items-center gap-1.5">
-                {displayedOrders.map((o, i) => {
-                  const active = i === currentOrderIndex;
-                  const sum = orderSummary(active ? orderItems : o.items);
-                  const sent = o.header?.status === "sent";
-                  return (
-                    <button
-                      key={o.id}
-                      type="button"
-                      data-order-chip
-                      aria-current={active ? "true" : undefined}
-                      aria-label={`Ir al pedido ${i + 1}`}
-                      title={`Pedido ${i + 1} · ${sum.especies.join(", ") || "sin especie"} · ${formatPallets(sum.pallets)} pallets${sent ? " · enviado" : ""}`}
-                      onClick={() => goToOrder(i)}
-                      className={`relative h-8 min-w-8 rounded-lg border px-2 text-sm font-semibold tabular-nums transition-colors ${
-                        active
-                          ? "border-primary bg-primary text-primary-fg shadow-xs"
-                          : "border-line-strong bg-surface text-fg-2 hover:border-primary hover:text-primary"
-                      }`}
-                    >
-                      {i + 1}
-                      {sent && !active && <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full border-2 border-surface bg-success" />}
-                    </button>
-                  );
-                })}
-                <Button
-                  size="sm"
-                  variant="primary"
-                  icon="plus"
-                  onClick={handleAddOrder}
-                  loading={addingOrder}
-                  disabled={currentOrderIsDeleted}
-                  className="ml-auto"
-                  title="Agrega otro pedido a este mismo Mail ID"
-                >
-                  Agregar pedido
-                </Button>
-              </div>
             </div>
 
             {/* Encabezado del pedido */}
@@ -3537,8 +3501,10 @@ const App = () => {
 
             {/* Detalle */}
             <div className="border-t border-line">
-              <div className="flex items-center gap-1 px-4 py-3 sm:px-5">
-                <h2 className="text-sm font-semibold text-fg">Detalle del pedido</h2>
+              {/* v53.0: [título | números + Agregar pedido (centro) | espacio] */}
+              <div className="grid grid-cols-1 items-center gap-3 px-4 py-3 sm:px-5 md:grid-cols-[1fr_auto_1fr]">
+                <div className="flex items-center gap-1">
+                <h2 className="text-sm font-semibold whitespace-nowrap text-fg">Detalle del pedido</h2>
                 <div className="relative">
                   <IconButton
                     size="sm"
@@ -3568,6 +3534,46 @@ const App = () => {
                     </>
                   )}
                 </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-1.5" aria-label="Pedidos de este Mail ID">
+                  {displayedOrders.map((o, i) => {
+                    const active = i === currentOrderIndex;
+                    const sum = orderSummary(active ? orderItems : o.items);
+                    const sent = o.header?.status === "sent";
+                    return (
+                      <button
+                        key={o.id}
+                        type="button"
+                        data-order-chip
+                        aria-current={active ? "true" : undefined}
+                        aria-label={`Ir al pedido ${i + 1}`}
+                        title={`Pedido ${i + 1} · ${sum.especies.join(", ") || "sin especie"} · ${formatPallets(sum.pallets)} pallets${sent ? " · enviado" : ""}`}
+                        onClick={() => goToOrder(i)}
+                        className={`relative h-8 min-w-8 rounded-lg border px-2 text-sm font-semibold tabular-nums transition-colors ${
+                          active
+                            ? "border-primary bg-primary text-primary-fg shadow-xs"
+                            : "border-line-strong bg-surface text-fg-2 hover:border-primary hover:text-primary"
+                        }`}
+                      >
+                        {i + 1}
+                        {sent && !active && <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full border-2 border-surface bg-success" />}
+                      </button>
+                    );
+                  })}
+                  <span className="mx-1 hidden h-6 w-px bg-line sm:block" aria-hidden="true" />
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon="plus"
+                    onClick={handleAddOrder}
+                    loading={addingOrder}
+                    disabled={currentOrderIsDeleted}
+                    title="Agrega otro pedido a este mismo Mail ID"
+                  >
+                    Agregar pedido
+                  </Button>
+                </div>
+                <div className="hidden md:block" aria-hidden="true" />
               </div>
 
               {/* Escritorio: tabla con margen dentro de la tarjeta */}
