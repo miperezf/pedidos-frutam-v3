@@ -66,7 +66,8 @@ const db = getFirestore(app);
 //        "Limpiar búsqueda" pide confirmación si va a descartar un borrador con datos
 //  v52.5 menú de perfil (círculo con estado de conexión) que agrupa historial,
 //        novedades, tema, cliente de correo, conexión y recarga; columnas centradas
-const APP_VERSION = "v52.5";
+//  v52.6 el menú de perfil se abre en el espacio libre a la derecha (borde de pantalla)
+const APP_VERSION = "v52.6";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -303,11 +304,26 @@ const App = () => {
   const addingOrderRef = useRef(false);
   const [showRowHelp, setShowRowHelp] = useState(false); // v52.2: ayuda de acciones de fila
   // v52.5: Esc cierra el menú de perfil (showConfigPanel = menú abierto)
+  // v52.6: el menú se ancla al borde derecho de la ventana (espacio libre) y su
+  // altura sigue al círculo de perfil al hacer scroll o cambiar el tamaño.
+  const avatarRef = useRef(null);
+  const [menuTop, setMenuTop] = useState(64);
   useEffect(() => {
     if (!showConfigPanel) return;
+    const place = () => {
+      const r = avatarRef.current?.getBoundingClientRect();
+      if (r) setMenuTop(Math.round(r.bottom + 8));
+    };
+    place();
     const onKey = (e) => { if (e.key === "Escape") setShowConfigPanel(false); };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
   }, [showConfigPanel]);
 
   // v52.1: diagnóstico de conexión (se muestra en pantalla y en Configuración)
@@ -3059,6 +3075,7 @@ const App = () => {
   const profileMenu = (
     <div className="relative">
       <button
+        ref={avatarRef}
         type="button"
         onClick={() => setShowConfigPanel((v) => !v)}
         aria-haspopup="menu"
@@ -3077,7 +3094,12 @@ const App = () => {
       {showConfigPanel && (
         <>
           <div className="fixed inset-0 z-40" onClick={closeMenu} aria-hidden="true" />
-          <div role="menu" aria-label="Perfil y ajustes" className="absolute top-11 right-0 z-50 w-80 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl">
+          <div
+            role="menu"
+            aria-label="Perfil y ajustes"
+            style={{ top: menuTop }}
+            className="fixed right-3 z-50 max-h-[calc(100vh-5rem)] w-80 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-2xl border border-line bg-surface shadow-2xl sm:right-4"
+          >
             {/* Perfil + estado */}
             <div className="flex items-center gap-3 border-b border-line bg-surface-2 px-4 py-3">
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-primary-fg">
