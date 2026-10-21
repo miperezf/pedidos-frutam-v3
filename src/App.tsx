@@ -56,7 +56,10 @@ const db = getFirestore(app);
 //  v52.1 navegador de pedidos (hasta 15+), cabecera de tabla contrastada, íconos
 //        con color y leyenda, FOB/FOT separado, sin "+" ambiguos, diagnóstico
 //        de conexión visible y tiempo máximo de 15 s por escritura
-const APP_VERSION = "v52.1";
+//  v52.2 observación solo en la 1ª fila (por pedido), total de pallets en negrita a
+//        la derecha, ayuda de acciones en botón (i), "Agregar fila" visible bajo la
+//        tabla, tabla con margen dentro de la tarjeta, sin textos de relleno
+const APP_VERSION = "v52.2";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -291,6 +294,7 @@ const App = () => {
   const searchingRef = useRef(false);
   const [addingOrder, setAddingOrder] = useState(false);
   const addingOrderRef = useRef(false);
+  const [showRowHelp, setShowRowHelp] = useState(false); // v52.2: ayuda de acciones de fila
 
   // v52.1: diagnóstico de conexión (se muestra en pantalla y en Configuración)
   const [authError, setAuthError] = useState(null); // { code, message }
@@ -1550,7 +1554,8 @@ const App = () => {
       if (sourceItemId) {
         const sourceItem = prevItems.find((item) => item.id === sourceItemId);
         if (sourceItem) {
-          const newItem = { ...sourceItem, id: crypto.randomUUID(), isCanceled: false };
+          // v52.2: la observación es del pedido (1ª fila); al duplicar no se copia
+          const newItem = { ...sourceItem, id: crypto.randomUUID(), isCanceled: false, estado: "" };
           const index = prevItems.findIndex((item) => item.id === sourceItemId);
           updatedItems = [
             ...prevItems.slice(0, index + 1),
@@ -2903,7 +2908,6 @@ const App = () => {
   };
   const statusMeta = STATUS_META[headerInfo.status] || { tone: "neutral", label: headerInfo.status || "—" };
   const proveedorLocked = currentOrderIsDeleted || (currentOrderIndex > 0 && !!headerInfo.reDestinatarios);
-  const canceledCount = orderItems.filter((it) => it.isCanceled).length;
   const formatPallets = (n) => Number(n || 0).toLocaleString("es-CL", { maximumFractionDigits: 2 });
   const emailClientLabel = { auto: "Outlook (detección automática)", desktop: "Outlook Desktop", web: "Outlook Web" }[emailClientPref] || "tu correo";
 
@@ -3057,15 +3061,21 @@ const App = () => {
           <IconButton size="sm" label="Bajar fila" icon="chevronDown" disabled={index === orderItems.length - 1 || currentOrderIsDeleted} onClick={() => handleDragReorder(index, index + 1)} />
         </>
       )}
-      <IconButton
-        size="sm"
-        icon="note"
-        tone="primary"
-        className={item.estado && item.estado !== "CANCELADO" ? "bg-primary-soft" : ""}
-        label={item.estado && item.estado !== "CANCELADO" ? `Editar observación: ${item.estado}` : "Editar observación"}
-        onClick={() => handleOpenObservationModal(item.id)}
-        disabled={currentOrderIsDeleted}
-      />
+      {/* v52.2: la observación es por pedido → solo en la 1ª fila. En otras filas
+          solo aparece si ya tienen una observación antigua (para verla o borrarla). */}
+      {index === 0 || (item.estado && item.estado !== "CANCELADO") ? (
+        <IconButton
+          size="sm"
+          icon="note"
+          tone="primary"
+          className={item.estado && item.estado !== "CANCELADO" ? "bg-primary-soft" : ""}
+          label={item.estado && item.estado !== "CANCELADO" ? `Observación del pedido: ${item.estado}` : "Agregar observación del pedido"}
+          onClick={() => handleOpenObservationModal(item.id)}
+          disabled={currentOrderIsDeleted}
+        />
+      ) : (
+        <span className="h-8 w-8 shrink-0" aria-hidden="true" />
+      )}
       <IconButton size="sm" icon="duplicate" tone="success" label="Duplicar fila" onClick={() => handleAddItem(item.id)} disabled={currentOrderIsDeleted} />
       <IconButton
         size="sm"
@@ -3086,15 +3096,17 @@ const App = () => {
     </>
   );
 
-  // v52.1: leyenda de acciones de fila (mismos íconos y colores que los botones)
-  const legend = (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 text-xs text-muted sm:px-5">
-      <span className="font-medium">Acciones de fila:</span>
-      <span className="inline-flex items-center gap-1"><Icon name="note" className="h-4 w-4 text-primary" />Observación</span>
-      <span className="inline-flex items-center gap-1"><Icon name="duplicate" className="h-4 w-4 text-success" />Duplicar</span>
-      <span className="inline-flex items-center gap-1"><Icon name="ban" className="h-4 w-4 text-warning" />Cancelar / revertir</span>
-      <span className="inline-flex items-center gap-1"><Icon name="trash" className="h-4 w-4 text-danger" />Eliminar</span>
-    </div>
+  // v52.2: "Agregar fila" visible al final de la tabla
+  const addRowButton = (
+    <button
+      type="button"
+      onClick={() => handleAddItem()}
+      disabled={currentOrderIsDeleted}
+      className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary-line bg-primary-soft/50 py-2.5 text-sm font-semibold text-primary transition-colors hover:border-primary hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      <Icon name="plus" className="h-4 w-4" />
+      Agregar fila
+    </button>
   );
 
   const tableInputProps = (item, field) => ({
@@ -3279,12 +3291,6 @@ const App = () => {
                     )}
                     {currentOrderIsDeleted && <span className="ml-2 text-sm font-semibold text-danger">(Eliminado)</span>}
                   </p>
-                  <p className="truncate text-xs text-muted">
-                    {(() => {
-                      const sum = orderSummary(orderItems);
-                      return `${sum.especies.join(", ") || "Sin especie"} · ${formatPallets(sum.pallets)} pallets · ${orderItems.length} ${orderItems.length === 1 ? "fila" : "filas"}`;
-                    })()}
-                  </p>
                 </div>
                 <Button
                   size="sm"
@@ -3396,17 +3402,42 @@ const App = () => {
 
             {/* Detalle */}
             <div className="border-t border-line">
-              <div className="flex items-center justify-between gap-2 px-4 py-3 sm:px-5">
-                <h2 className="text-sm font-semibold text-fg">
-                  Detalle <span className="font-normal text-muted">· {orderItems.length} {orderItems.length === 1 ? "fila" : "filas"}</span>
-                </h2>
-                <Button size="sm" variant="ghost" icon="plus" onClick={() => handleAddItem()} disabled={currentOrderIsDeleted}>
-                  Agregar fila
-                </Button>
+              <div className="flex items-center gap-1 px-4 py-3 sm:px-5">
+                <h2 className="text-sm font-semibold text-fg">Detalle del pedido</h2>
+                <div className="relative">
+                  <IconButton
+                    size="sm"
+                    icon="info"
+                    label="¿Qué hace cada acción de fila?"
+                    aria-expanded={showRowHelp}
+                    onClick={() => setShowRowHelp((v) => !v)}
+                  />
+                  {showRowHelp && (
+                    <>
+                      <div className="fixed inset-0 z-30" onClick={() => setShowRowHelp(false)} aria-hidden="true" />
+                      <div role="dialog" aria-label="Acciones de fila" className="absolute top-9 left-0 z-40 w-80 max-w-[calc(100vw-2rem)] space-y-2.5 rounded-xl border border-line bg-surface p-4 text-xs shadow-lg">
+                        <p className="text-sm font-semibold text-fg">Acciones de fila</p>
+                        {[
+                          { icon: "note", cls: "text-primary", t: "Observación del pedido", d: "Solo en la primera fila. Aparece en “Observaciones” del correo." },
+                          { icon: "duplicate", cls: "text-success", t: "Duplicar", d: "Copia la fila justo debajo (sin la observación)." },
+                          { icon: "ban", cls: "text-warning", t: "Cancelar / revertir", d: "La fila sale tachada en el correo y no suma pallets." },
+                          { icon: "trash", cls: "text-danger", t: "Eliminar", d: "Quita la fila del pedido." },
+                          { icon: "grip", cls: "text-muted", t: "Reordenar", d: "Arrastra desde la manilla (en celular, con ↑ ↓)." },
+                        ].map((a) => (
+                          <div key={a.t} className="flex items-start gap-2.5">
+                            <Icon name={a.icon} className={`mt-0.5 h-4 w-4 shrink-0 ${a.cls}`} />
+                            <p className="text-fg-2"><strong className="text-fg">{a.t}:</strong> {a.d}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
 
-              {/* Escritorio: tabla */}
-              <div className="hidden overflow-x-auto md:block">
+              {/* Escritorio: tabla con margen dentro de la tarjeta */}
+              <div className="hidden px-5 pb-5 md:block">
+                <div className="overflow-x-auto rounded-lg border border-line-strong">
                 <table className="w-full min-w-[860px] text-sm">
                   <thead>
                     <tr className="bg-thead text-left text-[11px] font-semibold tracking-wide text-thead-fg uppercase">
@@ -3464,20 +3495,18 @@ const App = () => {
                   </tbody>
                   <tfoot>
                     <tr className="border-t-2 border-line-strong bg-surface-3" data-testid="total-pallets">
-                      <td className="py-2.5 pl-3" />
-                      <td className="px-3 py-2.5 font-semibold text-fg tabular-nums">{formatPallets(currentOrderTotalPallets)}</td>
-                      <td colSpan={7} className="px-2 py-2.5 text-xs text-muted">
-                        pallets en total{canceledCount > 0 ? ` · ${canceledCount} ${canceledCount === 1 ? "fila cancelada no suma" : "filas canceladas no suman"}` : ""}
+                      <td colSpan={9} className="px-4 py-2.5 text-right font-bold text-fg">
+                        TOTAL PALLETS: <span className="ml-1 text-base tabular-nums">{formatPallets(currentOrderTotalPallets)}</span>
                       </td>
                     </tr>
                   </tfoot>
                 </table>
-                {legend}
+                </div>
+                {addRowButton}
               </div>
 
               {/* Móvil: tarjetas */}
               <div className="space-y-3 px-3 pb-4 md:hidden">
-                {legend}
                 {orderItems.map((item, index) => (
                   <div key={item.id} className={`rounded-xl border border-line p-3 ${item.isCanceled || currentOrderIsDeleted ? "bg-danger-soft/50" : "bg-surface"}`}>
                     <div className="mb-2 flex items-center justify-between gap-2">
@@ -3500,9 +3529,9 @@ const App = () => {
                     )}
                   </div>
                 ))}
-                <div className="flex items-baseline justify-between rounded-xl bg-surface-2 px-4 py-3 text-sm">
-                  <span className="text-muted">Total de pallets</span>
-                  <strong className="text-base text-fg tabular-nums">{formatPallets(currentOrderTotalPallets)}</strong>
+                {addRowButton}
+                <div className="rounded-xl bg-surface-3 px-4 py-3 text-right text-sm font-bold text-fg">
+                  TOTAL PALLETS: <span className="ml-1 text-base tabular-nums">{formatPallets(currentOrderTotalPallets)}</span>
                 </div>
               </div>
             </div>
@@ -3591,7 +3620,7 @@ const App = () => {
       <Modal
         open={showObservationModal && !!currentEditingItemData}
         onClose={handleCloseObservationModal}
-        title="Observación de la fila"
+        title="Observación del pedido"
         icon="note"
         size="md"
         initialFocus={observationTextareaRef}
