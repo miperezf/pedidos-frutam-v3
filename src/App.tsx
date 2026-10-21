@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Icon, Spinner, Button, IconButton, Badge, Modal, useConfirm, useToasts } from "./ui";
+import { detectarDirecto, exportaDirecto, oficinasDePais, normalizarTexto } from "./oficinas";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -74,9 +75,11 @@ const db = getFirestore(app);
 //  v52.9 campo Asunto con la misma altura que el resto
 //  v53.0 números de pedido + "Agregar pedido" centrados sobre la tabla de ítems
 //        (Anterior / Pedido N de M / Siguiente se mantienen arriba)
-//  v53.1 botón "Directo" junto a Exporta (Sí = azul / No = blanco). Por ahora solo en
-//        pantalla: la lógica y el guardado se definen en la siguiente iteración
-const APP_VERSION = "v53.1";
+//  v53.1 botón "Directo" junto a Exporta (Sí = azul / No = blanco)
+//  v53.2 Directo funcional: Exporta = "[PROVEEDOR] DIRECTO A [OFICINA]" (se guarda en
+//        el mismo campo, sin cambios en Firestore), panel Consignee & Notify bajo
+//        los campos y bloque en el correo bajo Observaciones (oficinas en oficinas.ts)
+const APP_VERSION = "v53.2";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -312,8 +315,8 @@ const App = () => {
   const [addingOrder, setAddingOrder] = useState(false);
   const addingOrderRef = useRef(false);
   const [showRowHelp, setShowRowHelp] = useState(false); // v52.2: ayuda de acciones de fila
-  // v53.1: "Directo" por pedido (id → true/false). Solo en memoria hasta definir su lógica.
-  const [directoByOrder, setDirectoByOrder] = useState({});
+  // v53.2: Exporta anterior por pedido, para restaurarlo al desactivar Directo
+  const prevExportaRef = useRef({});
   // v52.8: perfil y ajustes en panel lateral (Modal drawer: Esc y foco incluidos)
 
   // v52.1: diagnóstico de conexión (se muestra en pantalla y en Configuración)
@@ -816,6 +819,17 @@ const App = () => {
   // must read from this ref instead of the closure value.
   const headerInfoRef = useRef(headerInfo);
   headerInfoRef.current = headerInfo;
+
+  // v53.2: con Directo activo, Exporta = "[PROVEEDOR] DIRECTO A [OFICINA]" sigue al proveedor
+  useEffect(() => {
+    const oficina = detectarDirecto(headerInfo.exporta);
+    if (!oficina) return;
+    const deseado = exportaDirecto(headerInfo.reDestinatarios, oficina);
+    if (deseado !== headerInfo.exporta) {
+      setHeaderInfo((prev) => ({ ...prev, exporta: deseado }));
+      isUserEditing.current = true;
+    }
+  }, [headerInfo.reDestinatarios]);
   const activeOrderIdRef = useRef(null);
   activeOrderIdRef.current = activeOrderId;
 
@@ -1393,6 +1407,18 @@ const App = () => {
         [name]: value.toUpperCase(),
       }));
     }
+    // v53.2: si cambia el País de un pedido Directo, se ajusta la oficina
+    if (name === "deNombrePais") {
+      const actual = detectarDirecto(headerInfoRef.current.exporta);
+      if (actual && normalizarTexto(actual.pais) !== normalizarTexto(value)) {
+        const nuevas = oficinasDePais(value);
+        const nuevoExporta = nuevas.length
+          ? exportaDirecto(headerInfoRef.current.reDestinatarios, nuevas[0])
+          : prevExportaRef.current[activeOrderIdRef.current] ?? "";
+        setHeaderInfo((prevInfo) => ({ ...prevInfo, exporta: nuevoExporta }));
+        if (!nuevas.length) notify("info", `Directo se desactivó: no hay oficina configurada para ${value.toUpperCase() || "ese país"}.`);
+      }
+    }
   };
 
   const handleFocusField = () => {
@@ -1771,6 +1797,19 @@ const App = () => {
       orderHeader.fechaCarga ? formatDateToSpanish(orderHeader.fechaCarga) : ""
     );
     const formattedExporta    = escapeHtml(orderHeader.exporta  || "");
+    // v53.2: compra directa → Exporta destacado y bloque CONSIGNEE & NOTIFY
+    const oficinaDirecto = detectarDirecto(orderHeader.exporta);
+    const directoBlock = oficinaDirecto
+      ? `
+  <table cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;border-collapse:collapse;width:100%;">
+    <tr><td style="border-left:4px solid #2563eb;background-color:#eef4ff;padding:10px 12px;font-family:Arial,sans-serif;font-size:11px;line-height:1.5;color:#333333;mso-color-alt:#333333;text-align:left;">
+      <span style="font-size:12px;font-weight:bold;">${escapeHtml(oficinaDirecto.pais)}</span><br>
+      <span style="font-size:12px;font-weight:bold;">CONSIGNEE &amp; NOTIFY</span><br>
+      <span style="font-weight:bold;">${escapeHtml(oficinaDirecto.nombre)}</span><br>
+      ${oficinaDirecto.lineas.map((l) => escapeHtml(l)).join("<br>\n      ")}
+    </td></tr>
+  </table>`
+      : "";
     const incotermLabel       = escapeHtml(orderHeader.incoterm || "FOB");
 
     const orderBlockExtra = orderHeader.status === "deleted"
@@ -1840,7 +1879,7 @@ const App = () => {
     <p style="margin:0 0 3px 0;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;"><span style="font-weight:bold;">País:</span> ${formattedPais}</p>
     <p style="margin:0 0 3px 0;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;"><span style="font-weight:bold;">Nave:</span> ${formattedNave}</p>
     <p style="margin:0 0 3px 0;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;"><span style="font-weight:bold;">Fecha de carga:</span> ${formattedFechaCarga}</p>
-    <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;"><span style="font-weight:bold;">Exporta:</span> ${formattedExporta}</p>
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;"><span style="font-weight:bold;">Exporta:</span> ${oficinaDirecto ? `<span style="color:#1d4ed8;font-weight:bold;">${formattedExporta}</span>` : formattedExporta}</p>
   </div>
 
   <table cellpadding="0" cellspacing="0" border="0"
@@ -1868,6 +1907,7 @@ const App = () => {
   <p style="margin-top:10px;margin-bottom:0;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;">
     Observaciones: <span style="font-weight:normal;font-style:italic;font-size:11px;font-family:Arial,sans-serif;">${consolidatedObservationsText}</span>
   </p>
+${directoBlock}
 
 </div>
 </div>`;
@@ -2903,6 +2943,36 @@ const App = () => {
   const formatPallets = (n) => Number(n || 0).toLocaleString("es-CL", { maximumFractionDigits: 2 });
   const emailClientLabel = { auto: "Outlook (detección automática)", desktop: "Outlook Desktop", web: "Outlook Web" }[emailClientPref] || "tu correo";
 
+  // ── v53.2: compra directa ─────────────────────────────────────────────────
+  const directoOficina = detectarDirecto(headerInfo.exporta);
+  const oficinasPais = oficinasDePais(headerInfo.deNombrePais);
+  const applyExporta = (value) => {
+    const next = { ...headerInfoRef.current, exporta: value };
+    headerInfoRef.current = next;
+    setHeaderInfo(next);
+    isUserEditing.current = true;
+    saveCurrentFormDataToDisplayed()
+      .catch(() => {})
+      .finally(() => { isUserEditing.current = false; });
+  };
+  const toggleDirecto = () => {
+    if (currentOrderIsDeleted || !activeOrderId) return;
+    if (directoOficina) {
+      applyExporta(prevExportaRef.current[activeOrderId] ?? "");
+      return;
+    }
+    if (!oficinasPais.length) {
+      notify("info", `No hay oficina configurada para "${headerInfo.deNombrePais || "sin país"}". Completa el País o pide agregar la oficina.`);
+      return;
+    }
+    prevExportaRef.current[activeOrderId] = headerInfo.exporta || "";
+    applyExporta(exportaDirecto(headerInfo.reDestinatarios, oficinasPais[0]));
+  };
+  const chooseOficina = (id) => {
+    const o = oficinasPais.find((x) => x.id === id);
+    if (o) applyExporta(exportaDirecto(headerInfo.reDestinatarios, o));
+  };
+
   // v52.1: resumen de un pedido para el navegador (especies y pallets no cancelados)
   const orderSummary = (items) => {
     const list = Array.isArray(items) ? items : [];
@@ -3503,27 +3573,25 @@ const App = () => {
               <div className="min-w-0">
                 <div className="mb-1.5 flex h-6 items-center justify-between gap-2">
                   <label htmlFor="exporta" className="label mb-0">Exporta</label>
-                  {(() => {
-                    const directo = !!directoByOrder[activeOrderId];
-                    return (
-                      <div className={`inline-flex overflow-hidden rounded-md border border-line-strong ${currentOrderIsDeleted ? "pointer-events-none opacity-50" : ""}`}>
-                        <button
-                          type="button"
-                          aria-pressed={directo}
-                          aria-label={`Directo: ${directo ? "Sí" : "No"}`}
-                          title={`Directo: ${directo ? "Sí" : "No"} (clic para cambiar)`}
-                          onClick={() => {
-                            if (currentOrderIsDeleted || !activeOrderId) return;
-                            setDirectoByOrder((prev) => ({ ...prev, [activeOrderId]: !prev[activeOrderId] }));
-                          }}
-                          disabled={currentOrderIsDeleted}
-                          className={`px-2.5 py-0.5 text-xs leading-4 font-semibold transition-colors ${directo ? "bg-primary text-primary-fg" : "bg-surface text-muted hover:bg-surface-2 hover:text-fg"}`}
-                        >
-                          Directo
-                        </button>
-                      </div>
-                    );
-                  })()}
+                  <div className={`inline-flex overflow-hidden rounded-md border border-line-strong ${currentOrderIsDeleted ? "pointer-events-none opacity-50" : ""}`}>
+                    <button
+                      type="button"
+                      aria-pressed={!!directoOficina}
+                      aria-label={`Directo: ${directoOficina ? "Sí" : "No"}`}
+                      title={
+                        directoOficina
+                          ? `Directo a ${directoOficina.nombre} (clic para desactivar)`
+                          : oficinasPais.length
+                            ? `Marcar como compra directa a ${oficinasPais[0].nombre}`
+                            : "Directo: requiere un País con oficina configurada"
+                      }
+                      onClick={toggleDirecto}
+                      disabled={currentOrderIsDeleted}
+                      className={`px-2.5 py-0.5 text-xs leading-4 font-semibold transition-colors ${directoOficina ? "bg-primary text-primary-fg" : "bg-surface text-muted hover:bg-surface-2 hover:text-fg"}`}
+                    >
+                      Directo
+                    </button>
+                  </div>
                 </div>
                 <input
                   type="text"
@@ -3534,14 +3602,70 @@ const App = () => {
                   onFocus={handleFocusField}
                   onBlur={handleBlurField(handleHeaderBlur)}
                   placeholder="Exportadora"
-                  className="field"
+                  className={`field ${directoOficina ? "border-primary-line bg-primary-soft font-semibold text-primary" : ""}`}
                   ref={(el) => (headerInputRefs.current.exporta = el)}
-                  readOnly={currentOrderIsDeleted}
+                  readOnly={currentOrderIsDeleted || !!directoOficina}
+                  title={directoOficina ? "Automático por Directo. Desactiva Directo para editarlo." : undefined}
                   autoComplete="off"
                 />
+                {directoOficina && (
+                  <p className="mt-1 flex items-center gap-1 text-[11px] text-primary">
+                    <Icon name="lock" className="h-3 w-3" />Automático por Directo ({directoOficina.pais})
+                  </p>
+                )}
               </div>
               <InputField label="Asunto del email (automático)" name="emailSubject" value={headerInfo.emailSubject} onChange={handleHeaderChange} onBlur={handleHeaderBlur} ref={(el) => (headerInputRefs.current.emailSubject = el)} readOnly={true} className="font-mono" />
             </div>
+
+            {/* v53.2: panel Consignee & Notify (compra directa) */}
+            {directoOficina && (() => {
+              const lineas = [directoOficina.nombre, ...directoOficina.lineas];
+              const mitad = Math.ceil(lineas.length / 2);
+              const paisDistinto = normalizarTexto(directoOficina.pais) !== normalizarTexto(headerInfo.deNombrePais);
+              return (
+                <div className="mx-4 mb-5 rounded-xl border border-primary-line bg-primary-soft/50 p-4 sm:mx-5" data-testid="panel-directo">
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-fg">
+                      <Icon name="building" className="h-4 w-4" />
+                    </span>
+                    <p className="text-sm font-semibold text-fg">
+                      Consignee &amp; Notify · <span className="text-primary">{directoOficina.pais}</span>
+                    </p>
+                    {oficinasPais.length > 1 && (
+                      <label className="ml-2 flex items-center gap-2 text-xs text-muted">
+                        Puerto
+                        <select
+                          className="field h-8 w-auto py-0 text-xs"
+                          value={directoOficina.id}
+                          onChange={(e) => chooseOficina(e.target.value)}
+                          disabled={currentOrderIsDeleted}
+                        >
+                          {oficinasPais.map((o) => (
+                            <option key={o.id} value={o.id}>{o.puerto || o.nombre}</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    <span className="ml-auto text-xs text-muted">Se incluirá en el correo de este pedido</span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-x-6 text-xs leading-relaxed text-fg-2 sm:grid-cols-2">
+                    <div>
+                      {lineas.slice(0, mitad).map((l, i) => (
+                        <p key={i} className={i === 0 ? "font-semibold text-fg" : ""}>{l}</p>
+                      ))}
+                    </div>
+                    <div>
+                      {lineas.slice(mitad).map((l, i) => <p key={i}>{l}</p>)}
+                    </div>
+                  </div>
+                  {paisDistinto && (
+                    <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-warning">
+                      <Icon name="warning" className="h-4 w-4" />El País del pedido no coincide con la oficina ({directoOficina.pais}).
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Detalle */}
             <div className="border-t border-line">
