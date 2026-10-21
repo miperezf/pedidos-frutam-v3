@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import ReactDOM from "react-dom";
+import { Icon, Spinner, Button, IconButton, Badge, Modal, useConfirm, useToasts } from "./ui";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -50,9 +50,12 @@ const db = getFirestore(app);
 //  v51.6 fondo translúcido de modales (Tailwind v4), detector de versión operativo,
 //        parser tolerante en envío/preview, localStorage seguro, limpieza de restos
 //  v51.7 ruta base según el repositorio y aviso visible de entorno de pruebas
-const APP_VERSION = "v51.7";
+//  v52.0 nueva interfaz (tokens claro/oscuro, pestañas, barra de acciones),
+//        avisos de guardado/error, anti doble clic, confirmaciones propias,
+//        flechas respetan el cursor, reordenar en móvil, Mail ID validado
+const APP_VERSION = "v52.0";
 const APP_VERSION_DATE = "21 Oct 2026";
-const WHATSNEW_VERSION = "v51";
+const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
 // v51.7: etiqueta de entorno inyectada por vite.config.ts ("" en producción)
 const ENV_LABEL = typeof __ENV_LABEL__ !== "undefined" ? __ENV_LABEL__ : "";
@@ -71,19 +74,15 @@ const InputField = React.forwardRef(
       type = "text",
       list,
       readOnly = false,
-      darkMode = false,
+      title,
     },
     ref
   ) => {
     const safeValue =
       value === null || value === undefined ? "" : String(value);
     return (
-      <div className="mb-2 w-full">
-        <label
-          htmlFor={name}
-          className="block text-sm font-medium"
-          style={{ color: darkMode ? "#ffffff" : "#374151" }}
-        >
+      <div className="w-full min-w-0">
+        <label htmlFor={name} className="label">
           {label}
         </label>
         <input
@@ -95,16 +94,19 @@ const InputField = React.forwardRef(
           onFocus={onFocus}
           onBlur={onBlur}
           placeholder={placeholder}
-          className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 bg-gray-50 border ${className}`}
+          className={`field ${className}`}
           ref={ref}
           list={list}
           readOnly={readOnly}
+          title={title}
+          autoComplete="off"
         />
       </div>
     );
   }
 );
 
+// v52: celda editable. variant="field" para las tarjetas móviles.
 const TableInput = React.forwardRef(
   (
     {
@@ -118,6 +120,9 @@ const TableInput = React.forwardRef(
       readOnly = false,
       isCanceledProp = false,
       list,
+      inputMode,
+      ariaLabel,
+      variant = "cell",
     },
     ref
   ) => {
@@ -132,12 +137,16 @@ const TableInput = React.forwardRef(
         onFocus={onFocus}
         onBlur={onBlur}
         placeholder={placeholder}
-        className={`w-full h-full p-px border-none bg-transparent focus:outline-none focus:ring-1 focus:ring-blue-500 rounded-md ${
-          isCanceledProp ? "line-through" : ""
+        aria-label={ariaLabel}
+        inputMode={inputMode}
+        min={type === "number" ? 0 : undefined}
+        className={`${variant === "field" ? "field py-1.5" : "cell-input"} ${
+          isCanceledProp ? "line-through text-danger" : ""
         }`}
         ref={ref}
         readOnly={readOnly}
         list={list}
+        autoComplete="off"
       />
     );
   }
@@ -262,6 +271,24 @@ const App = () => {
   const [darkMode, setDarkMode] = useState(
     () => safeStorageGet(DARK_MODE_KEY) === "true"
   );
+  // v52: el modo oscuro se aplica con la clase "dark" en <html> (tokens CSS)
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", darkMode);
+  }, [darkMode]);
+
+  // v52: avisos, confirmaciones y estados de trabajo en curso
+  const [toastsEl, notify] = useToasts();
+  const [confirmEl, askConfirm] = useConfirm();
+  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
+  const lastSaveErrorToastRef = useRef(0);
+  const [isSending, setIsSending] = useState(false);
+  const sendingRef = useRef(false);
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const searchingRef = useRef(false);
+  const [addingOrder, setAddingOrder] = useState(false);
+  const addingOrderRef = useRef(false);
+
   const toggleDarkMode = () => {
     setDarkMode((prev) => {
       safeStorageSet(DARK_MODE_KEY, String(!prev));
@@ -512,7 +539,9 @@ const App = () => {
       await copyFormattedContentToClipboard(fullEmailBodyHtml);
 
       openEmailClient(consolidatedSubject);
+      notify("success", "Correo copiado. Pégalo en el cuerpo del mensaje con Ctrl+V.");
     } catch (err) {
+      notify("error", "No se pudo preparar el reenvío. Inténtalo de nuevo.");
     } finally {
       setHistoryResendingId(null);
     }
@@ -768,7 +797,26 @@ const App = () => {
     "preciosFOB",
   ];
 
+  // v52: envoltorio con indicador "Guardando… / Guardado" y aviso si falla.
+  // Sigue relanzando el error para que los llamadores mantengan su flujo.
   const saveOrderToFirestore = async (orderToSave) => {
+    if (!db || !userId) return;
+    if (orderToSave.rowAction && !orderToSave.id) return;
+    setSaveState("saving");
+    try {
+      await saveOrderToFirestoreRaw(orderToSave);
+      if (isMountedRef.current) setSaveState("saved");
+    } catch (error) {
+      if (isMountedRef.current) setSaveState("error");
+      if (Date.now() - lastSaveErrorToastRef.current > 8000) {
+        lastSaveErrorToastRef.current = Date.now();
+        notify("error", "No se pudieron guardar los últimos cambios. Revisa tu conexión e inténtalo de nuevo.");
+      }
+      throw error;
+    }
+  };
+
+  const saveOrderToFirestoreRaw = async (orderToSave) => {
     if (!db || !userId) {
       return;
     }
@@ -1354,7 +1402,7 @@ const App = () => {
               : o
           )
         );
-        window.alert("No se pudo actualizar el Incoterm en todos los pedidos. Se restauró el valor anterior; intenta de nuevo.");
+        notify("error", "No se pudo actualizar el Incoterm en todos los pedidos. Se restauró el valor anterior; inténtalo de nuevo.");
       }
     }
   };
@@ -1384,7 +1432,11 @@ const App = () => {
     // wait for this — they read from refs directly (see flushAndSave below).
     pendingSaveTimeout.current = setTimeout(async () => {
       pendingSaveTimeout.current = null;
-      await saveCurrentFormDataToDisplayed();
+      try {
+        await saveCurrentFormDataToDisplayed();
+      } catch {
+        // v52: el error ya se informó con un aviso
+      }
       isUserEditing.current = false;
     }, 300);
   };
@@ -1495,7 +1547,7 @@ const App = () => {
           header: { ...headerInfoRef.current },
           items: updatedItems,
           rowAction: true, // v51.4
-        });
+        }).catch(() => {});
       }, 0);
       return updatedItems;
     });
@@ -1512,7 +1564,7 @@ const App = () => {
           header: { ...headerInfoRef.current },
           items: updatedItems,
           rowAction: true, // v51.4
-        });
+        }).catch(() => {});
       }, 0);
       return updatedItems;
     });
@@ -1531,7 +1583,7 @@ const App = () => {
           header: { ...headerInfoRef.current },
           items: updated,
           rowAction: true, // v51.4
-        });
+        }).catch(() => {});
       }, 0);
       return updated;
     });
@@ -1553,7 +1605,7 @@ const App = () => {
           header: { ...headerInfoRef.current },
           items: updatedItems,
           rowAction: true, // v51.4
-        });
+        }).catch(() => {});
       }, 0);
       return updatedItems;
     });
@@ -1801,6 +1853,20 @@ const App = () => {
   };
 
   const handleAddOrder = async () => {
+    if (addingOrderRef.current) return;
+    addingOrderRef.current = true;
+    setAddingOrder(true);
+    try {
+      await handleAddOrderInner();
+    } catch {
+      // el aviso de error ya se mostró en saveOrderToFirestore
+    } finally {
+      addingOrderRef.current = false;
+      if (isMountedRef.current) setAddingOrder(false);
+    }
+  };
+
+  const handleAddOrderInner = async () => {
     if (!db || !userId) return;
 
     if (activeOrderId) {
@@ -1862,23 +1928,15 @@ const App = () => {
     if (!committedSearchTerm && !newBlankHeader.reDestinatarios) suggestionAppliedRef.current = "";
   };
 
-  const handlePreviousOrder = async () => {
-    if (currentOrderIndex === 0) return;
-    await flushAndSave();
-    const newIndex = currentOrderIndex - 1;
-    const target = displayedOrders[newIndex];
-    if (target) {
-      setActiveOrderId(target.id);
-      setHeaderInfo(target.header);
-      setOrderItems(target.items);
-      setCurrentOrderIndex(newIndex);
+  // v52: navegación directa a cualquier pedido (pestañas). Si el guardado
+  // previo falla, se queda en el pedido actual (el aviso ya se mostró).
+  const goToOrder = async (newIndex) => {
+    if (newIndex === currentOrderIndex || newIndex < 0 || newIndex >= displayedOrders.length) return;
+    try {
+      await flushAndSave();
+    } catch {
+      return;
     }
-  };
-
-  const handleNextOrder = async () => {
-    if (currentOrderIndex === displayedOrders.length - 1) return;
-    await flushAndSave();
-    const newIndex = currentOrderIndex + 1;
     const target = displayedOrders[newIndex];
     if (target) {
       setActiveOrderId(target.id);
@@ -1923,6 +1981,25 @@ const App = () => {
   const handleSearchClick = async () => {
     const term = searchTerm.toUpperCase().trim();
     if (!term) return;
+    // v52: mismo formato que exigen las reglas de Firestore
+    if (!/^[A-Z0-9]{4,12}$/.test(term)) {
+      notify("error", "El Mail ID solo admite letras y números, entre 4 y 12 caracteres (ej. 5B7D7692).");
+      return;
+    }
+    if (searchingRef.current) return;
+    searchingRef.current = true;
+    setIsSearching(true);
+    try {
+      await handleSearchInner(term);
+    } catch {
+      notify("error", "No se pudo completar la búsqueda. Revisa tu conexión e inténtalo de nuevo.");
+    } finally {
+      searchingRef.current = false;
+      if (isMountedRef.current) setIsSearching(false);
+    }
+  };
+
+  const handleSearchInner = async (term) => {
 
     suggestionAppliedRef.current = "";
 
@@ -2027,6 +2104,18 @@ const App = () => {
   };
 
   const performSendEmail = async () => {
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    setIsSending(true);
+    try {
+      await performSendEmailInner();
+    } finally {
+      sendingRef.current = false;
+      if (isMountedRef.current) setIsSending(false);
+    }
+  };
+
+  const performSendEmailInner = async () => {
     try {
       if (!db || !userId) {
         return;
@@ -2291,6 +2380,7 @@ const App = () => {
       await copyFormattedContentToClipboard(fullEmailBodyHtml);
 
       openEmailClient(consolidatedSubject);
+      notify("success", "Correo copiado. Pégalo en el cuerpo del mensaje con Ctrl+V.", 7000);
 
       setShowOrderActionsModal(false);
       setSearchTerm("");
@@ -2328,10 +2418,23 @@ const App = () => {
 
       await loadMyDrafts({ silent: true });
     } catch (error) {
+      notify("error", "No se pudo completar el envío. Ningún dato se perdió: revisa tu conexión e inténtalo de nuevo.", 8000);
     }
   };
 
   const handlePreviewOrder = async () => {
+    if (isPreviewing) return;
+    setIsPreviewing(true);
+    try {
+      await handlePreviewOrderInner();
+    } catch {
+      notify("error", "No se pudo generar la previsualización. Inténtalo de nuevo.");
+    } finally {
+      if (isMountedRef.current) setIsPreviewing(false);
+    }
+  };
+
+  const handlePreviewOrderInner = async () => {
     // Capture displayedOrders y headerInfo synchronously before any await.
     // headerInfo se captura del estado React (no del ref) por el mismo motivo
     // que en performSendEmail: el SENT MODE GUARD puede dejar el ref desactualizado.
@@ -2574,7 +2677,7 @@ const App = () => {
         header: { ...headerInfoRef.current },
         items: updatedItems,
         rowAction: true, // v51.4
-      });
+      }).catch(() => {});
     }
     setShowObservationModal(false);
     setCurrentEditingItemData(null);
@@ -2617,6 +2720,18 @@ const App = () => {
           }
           if (tablePosition) break;
         }
+      }
+
+      // v52: ← → solo saltan de campo si el cursor está al inicio/final del
+      // texto (antes impedían mover el cursor para corregir una palabra).
+      if (
+        (e.key === "ArrowLeft" || e.key === "ArrowRight") &&
+        typeof activeElement.selectionStart === "number"
+      ) {
+        const { selectionStart: selStart, selectionEnd: selEnd, value: text } = activeElement;
+        if (selStart !== selEnd) return;
+        if (e.key === "ArrowLeft" && selStart > 0) return;
+        if (e.key === "ArrowRight" && selStart < text.length) return;
       }
 
       if (
@@ -2738,1184 +2853,843 @@ const App = () => {
 
   const currentOrderIsDeleted = headerInfo.status === "deleted";
 
-  // ── v38 CLS FIX: Instead of swapping the entire DOM (which caused a 0.25 CLS
-  // score), we always render the same layout shell and replace only the inner
-  // content area with a skeleton while loading. This keeps the page geometry
-  // stable and eliminates the largest layout shift.
+  // ── v52: datos derivados para la interfaz ─────────────────────────────────
+  const STATUS_META = {
+    draft: { tone: "neutral", label: "Borrador" },
+    sent: { tone: "success", label: "Enviado" },
+    deleted: { tone: "danger", label: "Eliminado" },
+  };
+  const statusMeta = STATUS_META[headerInfo.status] || { tone: "neutral", label: headerInfo.status || "—" };
+  const proveedorLocked = currentOrderIsDeleted || (currentOrderIndex > 0 && !!headerInfo.reDestinatarios);
+  const canceledCount = orderItems.filter((it) => it.isCanceled).length;
+  const formatPallets = (n) => Number(n || 0).toLocaleString("es-CL", { maximumFractionDigits: 2 });
+  const emailClientLabel = { auto: "Outlook (detección automática)", desktop: "Outlook Desktop", web: "Outlook Web" }[emailClientPref] || "tu correo";
+
+  const copyMailId = async () => {
+    const id = headerInfo.mailId;
+    if (!id) return;
+    try {
+      await navigator.clipboard.writeText(id);
+      notify("success", <>Mail ID <strong className="font-mono">{id}</strong> copiado.</>, 2500);
+    } catch {
+      notify("info", <>Mail ID: <strong className="font-mono">{id}</strong></>, 4000);
+    }
+  };
+
+  const confirmNewMail = async () => {
+    const ok = await askConfirm({
+      title: "¿Iniciar un nuevo mail?",
+      message: "Los borradores actuales se descartarán y se creará un Mail ID nuevo. Los pedidos ya enviados no se modifican.",
+      confirmLabel: "Nuevo mail",
+      danger: true,
+    });
+    if (ok) handleNewMail();
+  };
+
+  const confirmDeleteOrder = async () => {
+    const ok = await askConfirm({
+      title: `¿Eliminar el Pedido ${currentOrderIndex + 1}?`,
+      message: "El pedido se quitará de este Mail ID y no aparecerá en el correo. Esta acción no se puede deshacer desde la app.",
+      confirmLabel: "Eliminar pedido",
+      danger: true,
+    });
+    if (ok) {
+      await handleDeleteCurrentOrder();
+      notify("success", "Pedido eliminado.", 2500);
+    }
+  };
+
+  const confirmReloadSession = async () => {
+    const ok = await askConfirm({
+      title: "¿Recargar la aplicación?",
+      message: "Se recargará la página y se descartarán los borradores sin enviar. Los pedidos enviados no se modifican.",
+      confirmLabel: "Recargar",
+      danger: true,
+    });
+    if (ok) window.location.reload();
+  };
+
+  const saveIndicator =
+    saveState === "saving" ? (
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted"><Spinner className="h-3.5 w-3.5" />Guardando…</span>
+    ) : saveState === "error" ? (
+      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-danger"><Icon name="warning" className="h-4 w-4" />Sin guardar</span>
+    ) : saveState === "saved" ? (
+      <span className="inline-flex items-center gap-1.5 text-xs text-success"><Icon name="check" className="h-4 w-4" />Guardado</span>
+    ) : null;
+
+  const vpcLogo = (
+    <img
+      src="https://www.vpcom.com/images/logo-vpc.png"
+      onError={(e) => {
+        e.target.onerror = null;
+        e.target.src = `${import.meta.env.BASE_URL}logo4.png`;
+      }}
+      alt="VPC"
+      width="96"
+      height="32"
+      className="h-8 w-auto max-w-[96px] shrink-0 object-contain dark:rounded-md dark:bg-white dark:px-1.5 dark:py-0.5"
+    />
+  );
+
+  const envBanner = ENV_LABEL ? (
+    <div role="status" className="border-b border-warning-line bg-warning-soft px-3 py-1.5 text-center text-xs font-semibold text-warning">
+      Entorno de {ENV_LABEL.toLowerCase()} · base de datos: <span className="font-mono">{firebaseConfig.projectId || "sin configurar"}</span> · no usar para pedidos reales
+    </div>
+  ) : null;
+
+  // ── Pantalla de carga (misma geometría que la interfaz real: sin saltos) ──
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-100 p-4 sm:p-6 lg:p-8">
-        <div className="max-w-4xl mx-auto bg-white rounded-xl shadow-lg p-4 sm:p-6 space-y-6 relative">
-          {/* Same header shell as real UI */}
-          <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
-            <div className="w-20 sm:w-24 md:w-28 h-9 bg-gray-200 rounded-md animate-pulse" />
+      <div className="flex min-h-screen flex-col bg-bg">
+        {envBanner}
+        <header className="border-b border-line bg-surface">
+          <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-3 sm:px-6">
+            <div className="h-8 w-24 animate-pulse rounded-md bg-surface-3" />
+            <div className="h-4 w-48 animate-pulse rounded bg-surface-3" />
           </div>
-          <div className="">
-            <div className="h-7 w-64 bg-gray-200 rounded animate-pulse mx-auto mb-4" />
-            <div className="flex items-end gap-2 mb-4">
-              <div className="flex-grow h-9 bg-gray-100 rounded-md border border-gray-200 animate-pulse" />
-              <div className="w-20 h-9 bg-blue-200 rounded-md animate-pulse" />
-              <div className="w-28 h-9 bg-gray-200 rounded-md animate-pulse" />
+        </header>
+        <main className="mx-auto w-full max-w-6xl flex-1 space-y-4 px-3 pt-4 sm:px-6 sm:pt-6" aria-busy="true">
+          <div className="h-[132px] animate-pulse rounded-2xl border border-line bg-surface" />
+          <div className="space-y-3 rounded-2xl border border-line bg-surface p-5">
+            <div className="h-6 w-40 animate-pulse rounded bg-surface-3" />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {[...Array(6)].map((_, i) => (
+                <div key={i} className="space-y-1.5">
+                  <div className="h-3 w-20 animate-pulse rounded bg-surface-3" />
+                  <div className="h-9 animate-pulse rounded-lg bg-surface-2" />
+                </div>
+              ))}
             </div>
-            {/* Skeleton form card */}
-            <div className="border border-gray-200 rounded-xl p-4 space-y-3 animate-pulse">
-              <div className="grid grid-cols-2 gap-3">
-                {[...Array(6)].map((_, i) => (
-                  <div key={i} className="space-y-1">
-                    <div className="h-3 w-24 bg-gray-200 rounded" />
-                    <div className="h-8 bg-gray-100 rounded border border-gray-200" />
-                  </div>
-                ))}
-              </div>
-              <div className="h-px bg-gray-100 my-2" />
-              {/* Skeleton table */}
-              <div className="space-y-2">
-                <div className="h-8 bg-blue-100 rounded" />
-                {[...Array(3)].map((_, i) => (
-                  <div key={i} className="h-7 bg-gray-50 rounded border border-gray-100" />
-                ))}
-              </div>
-            </div>
+            <div className="h-32 animate-pulse rounded-lg bg-surface-2" />
           </div>
-        </div>
+        </main>
       </div>
     );
   }
 
+  // Campos de la tabla (escritorio y móvil comparten definición)
+  const ITEM_FIELDS = [
+    { name: "pallets", label: "Pallets", placeholder: "21", type: "number", inputMode: "decimal", width: "w-20" },
+    { name: "especie", label: "Especie", placeholder: "Manzana", apple: true },
+    { name: "variedad", label: "Variedad", placeholder: "Gala", apple: true },
+    { name: "formato", label: "Formato", placeholder: "20 Kg" },
+    { name: "calibre", label: "Calibre", placeholder: "100;113" },
+    { name: "categoria", label: "Categoría", placeholder: "PRE:XFY" },
+    { name: "preciosFOB", label: `Precios ${headerInfo.incoterm || "FOB"}`, placeholder: "$14" },
+  ];
+
+  const rowActions = (item, index, compact = false) => (
+    <>
+      {compact && (
+        <>
+          <IconButton size="sm" label="Subir fila" icon="chevronUp" disabled={index === 0 || currentOrderIsDeleted} onClick={() => handleDragReorder(index, index - 1)} />
+          <IconButton size="sm" label="Bajar fila" icon="chevronDown" disabled={index === orderItems.length - 1 || currentOrderIsDeleted} onClick={() => handleDragReorder(index, index + 1)} />
+        </>
+      )}
+      <IconButton
+        size="sm"
+        icon="note"
+        tone={item.estado && item.estado !== "CANCELADO" ? "primary" : "default"}
+        label={item.estado && item.estado !== "CANCELADO" ? `Editar observación: ${item.estado}` : "Editar observación"}
+        onClick={() => handleOpenObservationModal(item.id)}
+        disabled={currentOrderIsDeleted}
+      />
+      <IconButton size="sm" icon="duplicate" label="Duplicar fila" onClick={() => handleAddItem(item.id)} disabled={currentOrderIsDeleted} />
+      <IconButton
+        size="sm"
+        icon={item.isCanceled ? "undo" : "ban"}
+        label={item.isCanceled ? "Revertir cancelación" : "Cancelar fila"}
+        onClick={() => toggleItemCancellation(item.id)}
+        disabled={currentOrderIsDeleted}
+      />
+      <IconButton
+        size="sm"
+        icon="trash"
+        tone="danger"
+        label={orderItems.length <= 1 ? "No se puede eliminar la última fila" : "Eliminar fila"}
+        onClick={() => handleDeleteItem(item.id)}
+        disabled={orderItems.length <= 1 || currentOrderIsDeleted}
+      />
+    </>
+  );
+
+  const tableInputProps = (item, field) => ({
+    name: field.name,
+    type: field.type || "text",
+    inputMode: field.inputMode,
+    value: item[field.name],
+    placeholder: field.placeholder,
+    onChange: (e) => handleItemChange(item.id, e),
+    onFocus: handleFocusField,
+    onBlur: handleBlurField((e) => handleItemBlur(item.id, e)),
+    readOnly: item.isCanceled || currentOrderIsDeleted,
+    isCanceledProp: item.isCanceled || currentOrderIsDeleted,
+    ...(field.apple && isAppleSpecies(item.especie) ? { list: "apple-varieties" } : {}),
+  });
+
   return (
-    <div
-      className="min-h-screen p-4 sm:p-6 lg:p-8 transition-colors duration-200"
-      style={{ backgroundColor: darkMode ? "#111827" : "#f3f4f6" }}
-    >
-      <div
-        className="max-w-4xl mx-auto rounded-xl shadow-lg p-4 sm:p-6 space-y-6 relative transition-colors duration-200"
-        style={{
-          backgroundColor: darkMode ? "#1f2937" : "#ffffff",
-          borderColor: darkMode ? "#374151" : "transparent",
-          border: darkMode ? "1px solid #374151" : undefined,
-        }}
-      >
+    <div className="flex min-h-screen flex-col bg-bg text-fg">
+      {envBanner}
 
-        <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
-
-          {!committedSearchTerm && (
-            <button
-              onClick={() => {
-                if (window.confirm("¿Iniciar un nuevo mail? Los pedidos actuales serán eliminados.")) {
-                  handleNewMail();
-                }
-              }}
-              className="p-1.5 rounded-full border shadow-sm transition-colors"
-              style={{ backgroundColor: darkMode ? "#374151" : "#ffffff", borderColor: darkMode ? "#4b5563" : "#e5e7eb" }}
-              title="Nuevo mail — descarta drafts actuales"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-            </button>
-          )}
-          <button
-            onClick={() => setShowConfigPanel(true)}
-            className="p-1.5 rounded-full border shadow-sm transition-colors" style={{ backgroundColor: darkMode ? "#374151" : "#ffffff", borderColor: darkMode ? "#4b5563" : "#e5e7eb" }}
-            title="Configuración"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-          </button>
-
-          {sentHistory.length > 0 && (
-            <button
-              onClick={() => setShowHistoryPanel(true)}
-              className="relative p-1.5 rounded-full border shadow-sm transition-colors" style={{ backgroundColor: darkMode ? "#374151" : "#ffffff", borderColor: darkMode ? "#4b5563" : "#e5e7eb" }}
-              title="Ver historial de envíos"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span className="absolute -top-1 -right-1 bg-blue-600 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold">
-                {sentHistory.length}
-              </span>
-            </button>
-          )}
-
-          <img
-            src="https://www.vpcom.com/images/logo-vpc.png"
-            onError={(e) => {
-              e.target.onerror = null;
-              e.target.src = `${import.meta.env.BASE_URL}logo4.png`;
-            }}
-            alt="Logo VPC"
-            width="112"
-            height="45"
-            className="w-20 sm:w-24 md:w-28 h-auto max-h-[45px] object-contain rounded-md"
-          />
+      {/* ── BARRA SUPERIOR ─────────────────────────────────────────────────── */}
+      <header className="sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur">
+        <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-3 sm:px-6">
+          {vpcLogo}
+          <div className="min-w-0 flex-1 border-l border-line pl-3">
+            <h1 className="truncate text-sm font-semibold text-fg sm:text-base">Pedidos Comercial Frutam</h1>
+            <p className="hidden truncate text-xs text-muted sm:block">Armado y envío de pedidos por Mail ID</p>
+          </div>
+          <nav className="flex items-center gap-0.5" aria-label="Acciones generales">
+            {!committedSearchTerm && (
+              <IconButton label="Nuevo mail" icon="newMail" onClick={confirmNewMail} />
+            )}
+            {sentHistory.length > 0 && (
+              <IconButton label="Historial de envíos" icon="clock" badge={sentHistory.length} onClick={() => setShowHistoryPanel(true)} />
+            )}
+            <IconButton label="Configuración" icon="cog" onClick={() => setShowConfigPanel(true)} />
+          </nav>
         </div>
+      </header>
 
-        {userId && (
-          <div className="absolute top-4 left-4 text-xs text-gray-500 flex items-center gap-2">
-            <span title={`ID: ${userId}`}>
-              🙍 {userId.substring(0, 8).toUpperCase()}
-            </span>
+      <main className="mx-auto w-full max-w-6xl flex-1 space-y-4 px-3 pt-4 pb-6 sm:px-6 sm:pt-6">
+        {/* ── BÚSQUEDA + ESTADO DEL MAIL ID ────────────────────────────────── */}
+        <section className="rounded-2xl border border-line bg-surface p-4 shadow-xs sm:p-5">
+          <form
+            className="flex flex-col gap-2 sm:flex-row sm:items-end"
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSearchClick();
+            }}
+          >
+            <div className="min-w-0 flex-1">
+              <label htmlFor="searchTerm" className="label">Buscar por Mail ID</label>
+              <div className="relative">
+                <Icon name="search" className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-subtle" />
+                <input
+                  type="text"
+                  id="searchTerm"
+                  name="searchTerm"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Ej. 5B7D7692"
+                  className="field pl-9 font-mono uppercase placeholder:normal-case"
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={12}
+                />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button type="submit" variant="primary" icon="search" loading={isSearching} className="flex-1 sm:flex-none">
+                Buscar
+              </Button>
+              <Button variant="secondary" onClick={handleClearSearch} className="flex-1 sm:flex-none">
+                Limpiar búsqueda
+              </Button>
+            </div>
+          </form>
+
+          <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line pt-3">
+            <span className="text-xs font-medium text-muted">Mail ID</span>
             <button
-              onClick={() => {
-                if (window.confirm("¿Resetear tu identidad de sesión? Esto creará un nuevo ID y perderás acceso a tus borradores actuales.")) {
-                  window.location.reload();
-                }
-              }}
-              className="text-gray-400 hover:text-red-500 transition-colors"
-              title="Resetear identidad de sesión"
+              type="button"
+              onClick={copyMailId}
+              disabled={!headerInfo.mailId}
+              className="inline-flex items-center gap-1.5 rounded-md bg-surface-3 px-2 py-1 font-mono text-sm font-semibold text-fg transition-colors hover:bg-line"
+              title="Copiar Mail ID"
+              aria-label={`Copiar Mail ID ${headerInfo.mailId || ""}`}
             >
-              ↺
+              {headerInfo.mailId || "—"}
+              <Icon name="copy" className="h-3.5 w-3.5 text-muted" />
             </button>
+            <Badge tone={statusMeta.tone}>{statusMeta.label}</Badge>
+            {committedSearchTerm && <Badge tone="primary">Recuperado por búsqueda</Badge>}
+            <span className="ml-auto">{saveIndicator}</span>
+          </div>
+        </section>
+
+        {/* ── AVISOS CONTEXTUALES ──────────────────────────────────────────── */}
+        {otherUsersPresent.length > 0 && committedSearchTerm && (
+          <div role="alert" className="flex items-start gap-3 rounded-xl border border-warning-line bg-warning-soft px-4 py-3 text-sm">
+            <Icon name="users" className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
+            <p className="text-fg-2">
+              <strong className="text-fg">{otherUsersPresent.join(", ")}</strong>{" "}
+              {otherUsersPresent.length === 1 ? "también está" : "también están"} editando este Mail ID ahora mismo. Los cambios podrían solaparse.
+            </p>
           </div>
         )}
 
-        <div className="">
-          <h1 className="text-xl sm:text-2xl font-bold text-center mb-4" style={{ color: darkMode ? "#f9fafb" : "#1f2937" }}>
-            Pedidos Comercial Frutam
-          </h1>
-          <div className="flex items-end gap-2 mb-4">
-            <div className="flex-grow">
-              <label
-                htmlFor="searchTerm"
-                className="block text-sm font-medium" style={{ color: darkMode ? "#d1d5db" : "#374151" }}
-              >
-                Buscar por Mail ID:
-              </label>
-              <input
-                type="text"
-                id="searchTerm"
-                name="searchTerm"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Ingrese el Mail ID (ej. 5B7D7692)"
-                className="mt-1 block w-full rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 border transition-colors" style={{ backgroundColor: darkMode ? "#374151" : "#f9fafb", borderColor: darkMode ? "#4b5563" : "#d1d5db", color: darkMode ? "#f9fafb" : "#111827" }}
-              />
-            </div>
-            <button
-              onClick={handleSearchClick}
-              className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-md shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-150 ease-in-out mt-auto"
-            >
-              Buscar
-            </button>
-            <button
-              onClick={handleClearSearch}
-              className="px-4 py-2 bg-gray-300 text-gray-800 font-semibold rounded-md shadow-md hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:ring-offset-2 transition duration-150 ease-in-out mt-auto"
-            >
-              Limpiar Búsqueda
-            </button>
-
-          </div>
-
-          {otherUsersPresent.length > 0 && committedSearchTerm && (
-            <div className="flex items-center gap-2 px-4 py-2 mb-2 bg-yellow-50 border border-yellow-300 rounded-lg text-yellow-800 text-sm">
-              <span className="text-lg">⚠️</span>
-              <span>
-                <strong>
-                  {otherUsersPresent.length === 1
-                    ? otherUsersPresent[0]
-                    : otherUsersPresent.join(", ")}
-                </strong>{" "}
-                {otherUsersPresent.length === 1 ? "también está" : "también están"} editando este pedido ahora mismo. Los cambios de ambos podrían solaparse.
-              </span>
-            </div>
-          )}
-
-          {/* ── SUGERENCIA DE AUTOCOMPLETADO ── */}
-          {proveedorSuggestion && (
-            <div className="flex items-center gap-2 px-4 py-2 mb-2 rounded-lg text-sm"
-              style={{
-                background: darkMode ? "#1e3a5f" : "#eff6ff",
-                border: `1px solid ${darkMode ? "#3b82f6" : "#93c5fd"}`,
-                color: darkMode ? "#bfdbfe" : "#1e40af",
-              }}
-            >
-              <span className="text-lg">💡</span>
-              <span style={{ flex: 1 }}>
-                <strong>Último pedido a {proveedorSuggestion.proveedor}:</strong>
-                {" "}{[...new Set(proveedorSuggestion.items.map(i => i.especie).filter(Boolean))].join(", ")}
+        {proveedorSuggestion && (
+          <div className="flex flex-col gap-3 rounded-xl border border-primary-line bg-primary-soft px-4 py-3 text-sm sm:flex-row sm:items-center">
+            <div className="flex min-w-0 flex-1 items-start gap-3">
+              <Icon name="bulb" className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+              <p className="min-w-0 text-fg-2">
+                <strong className="text-fg">Último pedido a {proveedorSuggestion.proveedor}:</strong>{" "}
+                {[...new Set(proveedorSuggestion.items.map((i) => i.especie).filter(Boolean))].join(", ")}
                 {proveedorSuggestion.nave ? ` · ${proveedorSuggestion.nave}` : ""}
                 {proveedorSuggestion.deNombrePais ? ` · ${proveedorSuggestion.deNombrePais}` : ""}
-              </span>
-              <button
-                onClick={applyProveedorSuggestion}
-                className="px-3 py-1 rounded-md text-xs font-bold text-white"
-                style={{ background: "#3b82f6", border: "none", cursor: "pointer", whiteSpace: "nowrap" }}
-              >
-                Precargar
-              </button>
-              <button
-                onClick={dismissProveedorSuggestion}
-                className="px-2 py-1 rounded-md text-xs font-semibold"
-                style={{ background: "transparent", border: `1px solid ${darkMode ? "#3b82f6" : "#93c5fd"}`, color: darkMode ? "#93c5fd" : "#1d4ed8", cursor: "pointer" }}
-              >
-                ✕
-              </button>
+              </p>
             </div>
-          )}
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-sm font-medium" style={{ color: darkMode ? "#d1d5db" : "#374151" }}>
-                  Nombre de Proveedor:
-                </label>
-                <div className={`flex rounded border shadow-sm overflow-hidden
-                  ${currentOrderIsDeleted ? "opacity-50 pointer-events-none" : ""}
-                  border-gray-300`}
-                >
-                  {["FOB", "FOT"].map((term, idx) => (
-                    <button
-                      key={term}
-                      type="button"
-                      onClick={() => {
-                        if (!currentOrderIsDeleted) {
-                          handleIncotermChange(term);
-                        }
-                      }}
-                      className={`px-2 py-0.5 text-xs font-medium transition-colors duration-100 focus:outline-none
-                        ${idx === 0 ? "" : "border-l border-gray-300"}
-                        ${
-                          headerInfo.incoterm === term
-                            ? "bg-blue-50 text-blue-700 font-semibold"
-                            : "bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-                        }
-                      `}
-                      disabled={currentOrderIsDeleted}
-                    >
-                      {term}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <input
-                type="text"
-                name="reDestinatarios"
-                value={headerInfo.reDestinatarios === null || headerInfo.reDestinatarios === undefined ? "" : String(headerInfo.reDestinatarios)}
-                onFocus={handleFocusField}
-                onBlur={handleBlurField(handleHeaderBlur)}
-                onChange={(e) => {
-                  handleHeaderChange(e);
-                  const val = e.target.value;
-                  if (lookupDebounceRef.current) clearTimeout(lookupDebounceRef.current);
-                  lookupDebounceRef.current = setTimeout(() => {
-                    lookupLastOrderForProveedor(val);
-                  }, 600);
-                }}
-                placeholder="Ingrese nombre de proveedor"
-                className={`mt-0 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 border transition-colors ${
-                  currentOrderIsDeleted || (currentOrderIndex > 0 && !!headerInfo.reDestinatarios)
-                    ? "bg-gray-100 text-gray-500 cursor-not-allowed"
-                    : "bg-gray-50"
-                }`}
-                ref={(el) => (headerInputRefs.current.reDestinatarios = el)}
-                readOnly={currentOrderIsDeleted || (currentOrderIndex > 0 && !!headerInfo.reDestinatarios)}
-              />
-            </div>
-
-            <div>
-              <InputField
-                label="País:"
-                  darkMode={darkMode}
-                name="deNombrePais"
-                value={headerInfo.deNombrePais}
-                onChange={handleHeaderChange}
-                onFocus={handleFocusField}
-                onBlur={handleBlurField(handleHeaderBlur)}
-                placeholder="País de destino"
-                ref={(el) => (headerInputRefs.current.deNombrePais = el)} // v51.3: clave alineada con headerInputOrder
-                readOnly={currentOrderIsDeleted}
-              />
-            </div>
-            <div>
-              <InputField
-                label="Nave:"
-                  darkMode={darkMode}
-                name="nave"
-                value={headerInfo.nave}
-                onChange={handleHeaderChange}
-                onFocus={handleFocusField}
-                onBlur={handleBlurField(handleHeaderBlur)}
-                placeholder="Nombre de Nave"
-                ref={(el) => (headerInputRefs.current.nave = el)}
-                readOnly={currentOrderIsDeleted}
-              />
-            </div>
-            <div>
-              <InputField
-                label="Fecha de carga:"
-                  darkMode={darkMode}
-                name="fechaCarga"
-                value={headerInfo.fechaCarga}
-                onChange={handleHeaderChange}
-                onFocus={handleFocusField}
-                onBlur={handleBlurField(handleHeaderBlur)}
-                placeholder="FECHA DE CARGA"
-                type="date"
-                ref={(el) => (headerInputRefs.current.fechaCarga = el)}
-                readOnly={currentOrderIsDeleted}
-              />
-            </div>
-            <div>
-              <InputField
-                label="Exporta:"
-                  darkMode={darkMode}
-                name="exporta"
-                value={headerInfo.exporta}
-                onChange={handleHeaderChange}
-                onFocus={handleFocusField}
-                onBlur={handleBlurField(handleHeaderBlur)}
-                placeholder="Exportadora"
-                ref={(el) => (headerInputRefs.current.exporta = el)}
-                readOnly={currentOrderIsDeleted}
-              />
-            </div>
-            <div>
-              <InputField
-                label="Asunto del Email:"
-                  darkMode={darkMode}
-                name="emailSubject"
-                value={headerInfo.emailSubject}
-                onChange={handleHeaderChange}
-                onBlur={handleHeaderBlur}
-                placeholder="Asunto del Correo (Se auto-completa)"
-                ref={(el) => (headerInputRefs.current.emailSubject = el)}
-                readOnly={true}
-              />
+            <div className="flex gap-2 sm:shrink-0">
+              <Button size="sm" variant="primary" onClick={applyProveedorSuggestion}>Precargar</Button>
+              <Button size="sm" variant="ghost" onClick={dismissProveedorSuggestion}>Descartar</Button>
             </div>
           </div>
-        </div>
+        )}
 
-        <div className="flex flex-col sm:flex-row justify-center items-center gap-4 mt-4 mb-6">
-          <div className="flex items-center justify-center w-full sm:w-auto">
-            <button
-              onClick={handlePreviousOrder}
-              disabled={currentOrderIndex === 0}
-              className="flex items-center justify-center px-3 py-2 bg-gray-300 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:ring-offset-2 transition duration-150 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Ir al pedido anterior (más antiguo)"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M9.707 4.293a1 1 0 010 1.414L5.414 10l4.293 4.293a1 1 0 01-1.414 1.414l-5-5a1 1 0 010-1.414l5-5a1 1 0 011.414 0z" clipRule="evenodd" />
-              </svg>
-              <span className="hidden sm:inline ml-1">Anterior</span>
-            </button>
-
-            <span className="text-center font-semibold text-lg mx-2 sm:mx-4 min-w-[150px] sm:min-w-0" style={{ color: darkMode ? "#d1d5db" : "#374151" }}>
-              {`Pedido ${currentOrderIndex + 1} de ${displayedOrders.length}`}
-              {currentOrderIsDeleted && (
-                <span className="text-red-500 ml-2">(Eliminado)</span>
-              )}
-            </span>
-
-            <button
-              onClick={handleNextOrder}
-              disabled={currentOrderIndex === displayedOrders.length - 1}
-              className="flex items-center justify-center px-3 py-2 bg-gray-300 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:ring-offset-2 transition duration-150 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Ir al siguiente pedido (más reciente)"
-            >
-              <span className="hidden sm:inline mr-1">Siguiente</span>
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10.293 15.707a1 1 0 010-1.414L14.586 10l-4.293-4.293a1 1 0 111.414-1.414l5 5a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0z" clipRule="evenodd" />
-              </svg>
-            </button>
-          </div>
-        </div>
-
+        {/* ── PEDIDO ACTIVO ────────────────────────────────────────────────── */}
         {displayedOrders.length === 0 && committedSearchTerm ? (
-          <div className="text-center text-gray-600 text-lg my-8">
-            No se encontraron pedidos con el ID:{" "}
-            <span className="font-semibold">{committedSearchTerm}</span>.
-          </div>
+          <section className="rounded-2xl border border-dashed border-line-strong bg-surface px-6 py-12 text-center">
+            <Icon name="search" className="mx-auto h-8 w-8 text-subtle" />
+            <p className="mt-3 font-semibold text-fg">
+              No se encontraron pedidos con el Mail ID <span className="font-mono">{committedSearchTerm}</span>
+            </p>
+            <p className="mt-1 text-sm text-muted">Revisa el código o usa “Limpiar búsqueda” para volver a tu borrador.</p>
+          </section>
         ) : (
-          <>
-            <div className="overflow-x-auto rounded-lg shadow-md">
-              <table className="min-w-full divide-y divide-gray-200 hidden md:table">
-                <thead className="bg-blue-600 text-white">
-                  <tr style={{ backgroundColor: "#2563eb", color: "#ffffff" }}>
-                    <th scope="col" className="px-1 py-px text-xs font-medium uppercase tracking-wider rounded-tl-lg whitespace-nowrap" title="Arrastrar para reordenar">⠿</th>
-                    <th scope="col" className="px-1 py-px text-xs font-medium uppercase tracking-wider whitespace-nowrap">Pallets</th>
-                    <th scope="col" className="px-1 py-px text-xs font-medium uppercase tracking-wider whitespace-nowrap">Especie</th>
-                    <th scope="col" className="px-1 py-px text-xs font-medium uppercase tracking-wider whitespace-nowrap">Variedad</th>
-                    <th scope="col" className="px-1 py-px text-xs font-medium uppercase tracking-wider whitespace-nowrap">Formato</th>
-                    <th scope="col" className="px-1 py-px text-xs font-medium uppercase tracking-wider whitespace-nowrap">Calibre</th>
-                    <th scope="col" className="px-1 py-px text-xs font-medium uppercase tracking-wider rounded-tr-lg whitespace-nowrap">Categoría</th>
-                    <th scope="col" className="px-1 py-px text-xs font-medium uppercase tracking-wider whitespace-nowrap">Precios {headerInfo.incoterm || "FOB"}</th>
-                    <th scope="col" className="px-1 py-px text-xs font-medium uppercase tracking-wider whitespace-nowrap">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {orderItems.map((item, index) => (
-                    <tr
-                      key={item.id}
-                      draggable={!currentOrderIsDeleted}
-                      onDragStart={() => { dragItemIndex.current = index; }}
-                      onDragEnter={() => { dragOverIndex.current = index; }}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDragEnd={() => {
-                        if (dragItemIndex.current !== null && dragOverIndex.current !== null) {
-                          handleDragReorder(dragItemIndex.current, dragOverIndex.current);
-                        }
-                        dragItemIndex.current = null;
-                        dragOverIndex.current = null;
-                      }}
-                      className={`hover:bg-gray-50 ${
-                        index % 2 === 0 ? "bg-gray-50" : "bg-white"
-                      } ${
-                        item.isCanceled || currentOrderIsDeleted
-                          ? "text-red-500"
-                          : ""
-                      } ${!currentOrderIsDeleted ? "cursor-grab active:cursor-grabbing" : ""}`}
-                      style={{ userSelect: "none" }}
+          <section className="rounded-2xl border border-line bg-surface shadow-xs">
+            {/* Pestañas de pedidos */}
+            <div className="flex items-center gap-2 border-b border-line px-2 sm:px-4">
+              <div className="-mb-px flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist" aria-label="Pedidos de este Mail ID">
+                {displayedOrders.map((o, i) => {
+                  const active = i === currentOrderIndex;
+                  return (
+                    <button
+                      key={o.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      onClick={() => goToOrder(i)}
+                      className={`flex shrink-0 items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium transition-colors ${
+                        active ? "border-primary text-primary" : "border-transparent text-muted hover:border-line-strong hover:text-fg"
+                      }`}
                     >
-                      <td className="px-1 py-px text-xs border-r whitespace-nowrap text-center text-gray-300 select-none" title="Arrastrar para reordenar" style={{ cursor: "grab", fontSize: "16px", width: "20px" }}>
-                        ⠿
-                      </td>
-                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center", borderColor: darkMode ? "#374151" : "#e5e7eb" }}>
-                        <TableInput
-                          type="number"
-                          name="pallets"
-                          min="0"
-                          value={item.pallets}
-                          onChange={(e) => handleItemChange(item.id, e)}
-                          onFocus={handleFocusField}
-                          onBlur={handleBlurField((e) => handleItemBlur(item.id, e))}
-                          placeholder="21"
-                          readOnly={item.isCanceled || currentOrderIsDeleted}
-                          isCanceledProp={item.isCanceled || currentOrderIsDeleted}
-                          ref={(el) => {
-                            if (!tableInputRefs.current[item.id])
-                              tableInputRefs.current[item.id] = {};
-                            tableInputRefs.current[item.id].pallets = el;
-                          }}
-                        />
-                      </td>
-                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center", borderColor: darkMode ? "#374151" : "#e5e7eb" }}>
-                        <TableInput
-                          name="especie"
-                          value={item.especie}
-                          onChange={(e) => handleItemChange(item.id, e)}
-                          onFocus={handleFocusField}
-                          onBlur={handleBlurField((e) => handleItemBlur(item.id, e))}
-                          placeholder="Manzana"
-                          readOnly={item.isCanceled || currentOrderIsDeleted}
-                          isCanceledProp={item.isCanceled || currentOrderIsDeleted}
-                          {...(isAppleSpecies(item.especie) ? { list: "apple-varieties" } : {})}
-                          ref={(el) => {
-                            if (!tableInputRefs.current[item.id])
-                              tableInputRefs.current[item.id] = {};
-                            tableInputRefs.current[item.id].especie = el;
-                          }}
-                        />
-                      </td>
-                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center", borderColor: darkMode ? "#374151" : "#e5e7eb" }}>
-                        <TableInput
-                          name="variedad"
-                          value={item.variedad}
-                          onChange={(e) => handleItemChange(item.id, e)}
-                          onFocus={handleFocusField}
-                          onBlur={handleBlurField((e) => handleItemBlur(item.id, e))}
-                          placeholder="Galas"
-                          readOnly={item.isCanceled || currentOrderIsDeleted}
-                          isCanceledProp={item.isCanceled || currentOrderIsDeleted}
-                          {...(isAppleSpecies(item.especie) ? { list: "apple-varieties" } : {})}
-                          ref={(el) => {
-                            if (!tableInputRefs.current[item.id])
-                              tableInputRefs.current[item.id] = {};
-                            tableInputRefs.current[item.id].variedad = el;
-                          }}
-                        />
-                      </td>
-                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center", borderColor: darkMode ? "#374151" : "#e5e7eb" }}>
-                        <TableInput
-                          name="formato"
-                          value={item.formato}
-                          onChange={(e) => handleItemChange(item.id, e)}
-                          onFocus={handleFocusField}
-                          onBlur={handleBlurField((e) => handleItemBlur(item.id, e))}
-                          placeholder="20 Kg"
-                          readOnly={item.isCanceled || currentOrderIsDeleted}
-                          isCanceledProp={item.isCanceled || currentOrderIsDeleted}
-                          ref={(el) => {
-                            if (!tableInputRefs.current[item.id])
-                              tableInputRefs.current[item.id] = {};
-                            tableInputRefs.current[item.id].formato = el;
-                          }}
-                        />
-                      </td>
-                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center", borderColor: darkMode ? "#374151" : "#e5e7eb" }}>
-                        <TableInput
-                          name="calibre"
-                          value={item.calibre}
-                          onChange={(e) => handleItemChange(item.id, e)}
-                          onFocus={handleFocusField}
-                          onBlur={handleBlurField((e) => handleItemBlur(item.id, e))}
-                          placeholder="100;113"
-                          readOnly={item.isCanceled || currentOrderIsDeleted}
-                          isCanceledProp={item.isCanceled || currentOrderIsDeleted}
-                          ref={(el) => {
-                            if (!tableInputRefs.current[item.id])
-                              tableInputRefs.current[item.id] = {};
-                            tableInputRefs.current[item.id].calibre = el;
-                          }}
-                        />
-                      </td>
-                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center", borderColor: darkMode ? "#374151" : "#e5e7eb" }}>
-                        <TableInput
-                          name="categoria"
-                          value={item.categoria}
-                          onChange={(e) => handleItemChange(item.id, e)}
-                          onFocus={handleFocusField}
-                          onBlur={handleBlurField((e) => handleItemBlur(item.id, e))}
-                          placeholder="PRE:XFY"
-                          readOnly={item.isCanceled || currentOrderIsDeleted}
-                          isCanceledProp={item.isCanceled || currentOrderIsDeleted}
-                          ref={(el) => {
-                            if (!tableInputRefs.current[item.id])
-                              tableInputRefs.current[item.id] = {};
-                            tableInputRefs.current[item.id].categoria = el;
-                          }}
-                        />
-                      </td>
-                      <td className="px-1 py-px text-xs border-r whitespace-nowrap" style={{ textAlign: "center", borderColor: darkMode ? "#374151" : "#e5e7eb" }}>
-                        <TableInput
-                          name="preciosFOB"
-                          value={item.preciosFOB}
-                          onChange={(e) => handleItemChange(item.id, e)}
-                          onFocus={handleFocusField}
-                          onBlur={handleBlurField((e) => handleItemBlur(item.id, e))}
-                          placeholder="$14"
-                          readOnly={item.isCanceled || currentOrderIsDeleted}
-                          isCanceledProp={item.isCanceled || currentOrderIsDeleted}
-                          ref={(el) => {
-                            if (!tableInputRefs.current[item.id])
-                              tableInputRefs.current[item.id] = {};
-                            tableInputRefs.current[item.id].preciosFOB = el;
-                          }}
-                        />
-                      </td>
-                      <td className="px-1 py-px text-right text-xs font-medium flex items-center justify-center h-full">
-                        <button
-                          onClick={() => handleOpenObservationModal(item.id)}
-                          className="text-blue-600 hover:text-blue-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 p-1 rounded-md"
-                          title="Editar Observación"
-                          disabled={currentOrderIsDeleted}
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                          </svg>
-                        </button>
-                        <button
-                          onClick={() => handleAddItem(item.id)}
-                          className="text-green-600 hover:text-green-900 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 p-1 rounded-md"
-                          title="Duplicar fila"
-                          disabled={currentOrderIsDeleted}
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                            <path fillRule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clipRule="evenodd" />
-                          </svg>
-                        </button>
-                        <button
-                          onClick={() => toggleItemCancellation(item.id)}
-                          className={`ml-1 ${item.isCanceled ? "text-gray-600 hover:text-gray-900" : "text-red-600 hover:text-red-900"} focus:outline-none focus:ring-2 focus:ring-offset-2 p-1 rounded-md`}
-                          title={item.isCanceled ? "Revertir cancelación" : "Cancelar fila"}
-                          disabled={currentOrderIsDeleted}
-                        >
-                          {item.isCanceled ? (
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.707-10.293a1 1 0 00-1.414-1.414L7.586 9H6a1 1 0 000 2h1.586l1.707 1.707a1 1 0 001.414-1.414L10.414 10H12a1 1 0 000-2h-1.586z" clipRule="evenodd" />
-                            </svg>
-                          ) : (
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                            </svg>
-                          )}
-                        </button>
-                        <button
-                          onClick={() => handleDeleteItem(item.id)}
-                          className={`ml-1 text-red-600 hover:text-red-900 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 p-1 rounded-md ${orderItems.length <= 1 || currentOrderIsDeleted ? "opacity-50 cursor-not-allowed" : ""}`}
-                          title={orderItems.length <= 1 ? "No se puede eliminar la última fila" : "Eliminar fila"}
-                          disabled={orderItems.length <= 1 || currentOrderIsDeleted}
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                            <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 011-1h4a1 1 0 110 2H8a1 1 0 01-1-1zm2 3a1 1 0 011-1h4a1 1 0 110 2H8a1 1 0 01-1-1zm-1 4a1 1 0 002 0v-4a1 1 0 00-2 0v4z" />
-                          </svg>
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  <tr style={{ backgroundColor: "#e0e0e0" }}>
-                    <td colSpan="8" style={{ padding: "6px 15px 6px 6px", textAlign: "right", fontWeight: "bold", border: "1px solid #ccc", borderBottomLeftRadius: "8px", marginTop: "15px" }}>
-                      Total de Pallets:
-                    </td>
-                    <td colSpan="1" style={{ padding: "6px", fontWeight: "bold", border: "1px solid #ccc", borderBottomRightRadius: "8px", textAlign: "center" }}>
-                      {currentOrderTotalPallets} Pallets
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                      Pedido {i + 1}
+                      {o.header?.status === "sent" && <span className="h-1.5 w-1.5 rounded-full bg-success" title="Enviado" />}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={handleAddOrder}
+                  disabled={currentOrderIsDeleted || addingOrder}
+                  className="flex shrink-0 items-center gap-1 rounded-md px-2.5 py-1.5 text-sm font-medium text-muted transition-colors hover:bg-surface-3 hover:text-primary disabled:opacity-40"
+                  title="Agregar un pedido a este Mail ID"
+                  aria-label="Nuevo pedido en este Mail ID"
+                >
+                  <Icon name="plus" className="h-4 w-4" />
+                </button>
+              </div>
+              <span className="hidden shrink-0 text-xs text-muted sm:block">
+                Pedido {currentOrderIndex + 1} de {displayedOrders.length}
+                {currentOrderIsDeleted && <span className="ml-2 font-semibold text-danger">(Eliminado)</span>}
+              </span>
             </div>
 
-            {/* Mobile View - Cards */}
-            <div className="md:hidden space-y-4 p-2">
-              {orderItems.map((item, index) => (
-                <div
-                  key={item.id}
-                  className={`bg-white border border-gray-200 rounded-lg p-4 shadow-sm space-y-2 ${
-                    item.isCanceled || currentOrderIsDeleted
-                      ? "line-through text-red-500 opacity-70"
-                      : ""
-                  }`}
-                >
-                  <div className="flex justify-between items-center pb-2 border-b border-gray-100">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="text-gray-300 text-lg select-none"
-                        title="Arrastrar para reordenar"
-                        style={{ cursor: "grab", lineHeight: 1 }}
-                        draggable={!currentOrderIsDeleted}
-                        onDragStart={() => { dragItemIndex.current = index; }}
+            {/* Encabezado del pedido */}
+            <div className="grid grid-cols-1 gap-x-4 gap-y-3 p-4 sm:grid-cols-2 sm:p-5 lg:grid-cols-3">
+              <div className="min-w-0">
+                {/* h-4 = alto de una etiqueta normal: el selector FOB/FOT no desalinea el campo */}
+                <div className="mb-1 flex h-4 items-center justify-between gap-2">
+                  <label htmlFor="reDestinatarios" className="label mb-0">Proveedor</label>
+                  <div role="group" aria-label="Incoterm" className={`inline-flex rounded-md border border-line-strong p-0.5 ${currentOrderIsDeleted ? "pointer-events-none opacity-50" : ""}`}>
+                    {["FOB", "FOT"].map((term) => {
+                      const active = headerInfo.incoterm === term;
+                      return (
+                        <button
+                          key={term}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => { if (!currentOrderIsDeleted) handleIncotermChange(term); }}
+                          disabled={currentOrderIsDeleted}
+                          title={`Precios ${term} para todos los pedidos de este Mail ID`}
+                          className={`rounded px-2 py-0.5 text-[11px] font-semibold transition-colors ${active ? "bg-primary text-primary-fg" : "text-muted hover:text-fg"}`}
+                        >
+                          {term}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <input
+                  type="text"
+                  id="reDestinatarios"
+                  name="reDestinatarios"
+                  value={headerInfo.reDestinatarios === null || headerInfo.reDestinatarios === undefined ? "" : String(headerInfo.reDestinatarios)}
+                  onFocus={handleFocusField}
+                  onBlur={handleBlurField(handleHeaderBlur)}
+                  onChange={(e) => {
+                    handleHeaderChange(e);
+                    const val = e.target.value;
+                    if (lookupDebounceRef.current) clearTimeout(lookupDebounceRef.current);
+                    lookupDebounceRef.current = setTimeout(() => {
+                      lookupLastOrderForProveedor(val);
+                    }, 600);
+                  }}
+                  placeholder="Nombre del proveedor"
+                  className="field"
+                  ref={(el) => (headerInputRefs.current.reDestinatarios = el)}
+                  readOnly={proveedorLocked}
+                  title={proveedorLocked && !currentOrderIsDeleted ? "El proveedor se define en el primer pedido del Mail ID" : undefined}
+                  autoComplete="off"
+                />
+              </div>
+              <InputField label="País" name="deNombrePais" value={headerInfo.deNombrePais} onChange={handleHeaderChange} onFocus={handleFocusField} onBlur={handleBlurField(handleHeaderBlur)} placeholder="País de destino" ref={(el) => (headerInputRefs.current.deNombrePais = el)} readOnly={currentOrderIsDeleted} />
+              <InputField label="Nave" name="nave" value={headerInfo.nave} onChange={handleHeaderChange} onFocus={handleFocusField} onBlur={handleBlurField(handleHeaderBlur)} placeholder="Nombre de la nave" ref={(el) => (headerInputRefs.current.nave = el)} readOnly={currentOrderIsDeleted} />
+              <InputField label="Fecha de carga" name="fechaCarga" type="date" value={headerInfo.fechaCarga} onChange={handleHeaderChange} onFocus={handleFocusField} onBlur={handleBlurField(handleHeaderBlur)} ref={(el) => (headerInputRefs.current.fechaCarga = el)} readOnly={currentOrderIsDeleted} />
+              <InputField label="Exporta" name="exporta" value={headerInfo.exporta} onChange={handleHeaderChange} onFocus={handleFocusField} onBlur={handleBlurField(handleHeaderBlur)} placeholder="Exportadora" ref={(el) => (headerInputRefs.current.exporta = el)} readOnly={currentOrderIsDeleted} />
+              <InputField label="Asunto del email (automático)" name="emailSubject" value={headerInfo.emailSubject} onChange={handleHeaderChange} onBlur={handleHeaderBlur} ref={(el) => (headerInputRefs.current.emailSubject = el)} readOnly={true} className="font-mono text-xs" />
+            </div>
+
+            {/* Detalle */}
+            <div className="border-t border-line">
+              <div className="flex items-center justify-between gap-2 px-4 py-3 sm:px-5">
+                <h2 className="text-sm font-semibold text-fg">
+                  Detalle <span className="font-normal text-muted">· {orderItems.length} {orderItems.length === 1 ? "fila" : "filas"}</span>
+                </h2>
+                <Button size="sm" variant="ghost" icon="plus" onClick={() => handleAddItem()} disabled={currentOrderIsDeleted}>
+                  Agregar fila
+                </Button>
+              </div>
+
+              {/* Escritorio: tabla */}
+              <div className="hidden overflow-x-auto md:block">
+                <table className="w-full min-w-[860px] text-sm">
+                  <thead>
+                    <tr className="border-y border-line bg-surface-2 text-left text-[11px] font-semibold tracking-wide text-muted uppercase">
+                      <th scope="col" className="w-8 py-2 pl-3"><span className="sr-only">Mover</span></th>
+                      {ITEM_FIELDS.map((f) => (
+                        <th key={f.name} scope="col" className={`px-2 py-2 whitespace-nowrap ${f.width || ""}`}>{f.label}</th>
+                      ))}
+                      <th scope="col" className="py-2 pr-4 text-right">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orderItems.map((item, index) => (
+                      <tr
+                        key={item.id}
                         onDragEnter={() => { dragOverIndex.current = index; }}
                         onDragOver={(e) => e.preventDefault()}
-                        onDragEnd={() => {
-                          if (dragItemIndex.current !== null && dragOverIndex.current !== null) {
-                            handleDragReorder(dragItemIndex.current, dragOverIndex.current);
-                          }
-                          dragItemIndex.current = null;
-                          dragOverIndex.current = null;
-                        }}
-                      >⠿</span>
-                      <span className="text-xs font-semibold text-blue-600">
-                        Artículo #{index + 1}
+                        className={`border-b border-line transition-colors ${item.isCanceled || currentOrderIsDeleted ? "bg-danger-soft/50" : "hover:bg-surface-2"}`}
+                      >
+                        <td className="py-1 pl-2">
+                          <span
+                            draggable={!currentOrderIsDeleted}
+                            onDragStart={() => { dragItemIndex.current = index; }}
+                            onDragEnd={() => {
+                              if (dragItemIndex.current !== null && dragOverIndex.current !== null) {
+                                handleDragReorder(dragItemIndex.current, dragOverIndex.current);
+                              }
+                              dragItemIndex.current = null;
+                              dragOverIndex.current = null;
+                            }}
+                            className={`flex h-8 w-6 items-center justify-center rounded text-subtle ${currentOrderIsDeleted ? "" : "cursor-grab hover:bg-surface-3 hover:text-fg active:cursor-grabbing"}`}
+                            title="Arrastrar para reordenar"
+                          >
+                            <Icon name="grip" className="h-4 w-4" />
+                          </span>
+                        </td>
+                        {ITEM_FIELDS.map((f) => (
+                          <td key={f.name} className={`px-1 py-1 ${f.width || ""}`}>
+                            <TableInput
+                              {...tableInputProps(item, f)}
+                              ariaLabel={`${f.label}, fila ${index + 1}`}
+                              ref={(el) => {
+                                if (!tableInputRefs.current[item.id]) tableInputRefs.current[item.id] = {};
+                                tableInputRefs.current[item.id][f.name] = el;
+                              }}
+                            />
+                          </td>
+                        ))}
+                        <td className="py-1 pr-3">
+                          <div className="flex items-center justify-end gap-0.5">{rowActions(item, index)}</div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-surface-2" data-testid="total-pallets">
+                      <td className="py-2.5 pl-3" />
+                      <td className="px-3 py-2.5 font-semibold text-fg tabular-nums">{formatPallets(currentOrderTotalPallets)}</td>
+                      <td colSpan={7} className="px-2 py-2.5 text-xs text-muted">
+                        pallets en total{canceledCount > 0 ? ` · ${canceledCount} ${canceledCount === 1 ? "fila cancelada no suma" : "filas canceladas no suman"}` : ""}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+
+              {/* Móvil: tarjetas */}
+              <div className="space-y-3 px-3 pb-4 md:hidden">
+                {orderItems.map((item, index) => (
+                  <div key={item.id} className={`rounded-xl border border-line p-3 ${item.isCanceled || currentOrderIsDeleted ? "bg-danger-soft/50" : "bg-surface"}`}>
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-muted">
+                        Fila {index + 1}
+                        {item.isCanceled && <Badge tone="danger" className="ml-2">Cancelada</Badge>}
                       </span>
+                      <div className="flex items-center">{rowActions(item, index, true)}</div>
                     </div>
-                    <div className="flex space-x-2">
-                      <button onClick={() => handleOpenObservationModal(item.id)} className="text-blue-600 hover:text-blue-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 p-1 rounded-md" title="Editar Observación" disabled={currentOrderIsDeleted}>
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
-                          <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
-                        </svg>
-                      </button>
-                      <button onClick={() => handleAddItem(item.id)} className="text-green-600 hover:text-green-900 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 p-1 rounded-md" title="Duplicar fila" disabled={currentOrderIsDeleted}>
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" />
-                        </svg>
-                      </button>
-                      <button onClick={() => toggleItemCancellation(item.id)} className={`ml-1 ${item.isCanceled ? "text-gray-600 hover:text-gray-900" : "text-red-600 hover:text-red-900"} focus:outline-none focus:ring-2 focus:ring-offset-2 p-1 rounded-md`} title={item.isCanceled ? "Revertir cancelación" : "Cancelar fila"} disabled={currentOrderIsDeleted}>
-                        {item.isCanceled ? (
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.707-10.293a1 1 0 00-1.414-1.414L7.586 9H6a1 1 0 000 2h1.586l1.707 1.707a1 1 0 001.414-1.414L10.414 10H12a1 1 0 000-2h-1.586z" clipRule="evenodd" /></svg>
-                        ) : (
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
-                        )}
-                      </button>
-                      <button onClick={() => handleDeleteItem(item.id)} className={`ml-1 text-red-600 hover:text-red-900 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 p-1 rounded-md ${orderItems.length <= 1 || currentOrderIsDeleted ? "opacity-50 cursor-not-allowed" : ""}`} title={orderItems.length <= 1 ? "No se puede eliminar la última fila" : "Eliminar fila"} disabled={orderItems.length <= 1 || currentOrderIsDeleted}>
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 011-1h4a1 1 0 110 2H8a1 1 0 01-1-1zm2 3a1 1 0 011-1h4a1 1 0 110 2H8a1 1 0 01-1-1zm-1 4a1 1 0 002 0v-4a1 1 0 00-2 0v4z" /></svg>
-                      </button>
+                    <div className="grid grid-cols-2 gap-2">
+                      {ITEM_FIELDS.map((f) => (
+                        <label key={f.name} className={`block min-w-0 ${f.name === "preciosFOB" ? "col-span-2" : ""}`}>
+                          <span className="label">{f.label}</span>
+                          <TableInput {...tableInputProps(item, f)} variant="field" />
+                        </label>
+                      ))}
                     </div>
+                    {item.estado && item.estado !== "CANCELADO" && (
+                      <p className="mt-2 flex items-start gap-1.5 text-xs text-muted"><Icon name="note" className="h-4 w-4 shrink-0" />{item.estado}</p>
+                    )}
                   </div>
-
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="font-semibold text-gray-500 w-1/2">Pallets:</span>
-                    <TableInput name="pallets" value={item.pallets} onChange={(e) => handleItemChange(item.id, e)} onFocus={handleFocusField} onBlur={handleBlurField((e) => handleItemBlur(item.id, e))} placeholder="21" readOnly={item.isCanceled || currentOrderIsDeleted} isCanceledProp={item.isCanceled || currentOrderIsDeleted} />
-                  </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="font-semibold text-gray-500 w-1/2">Especie:</span>
-                    <TableInput name="especie" value={item.especie} onChange={(e) => handleItemChange(item.id, e)} onFocus={handleFocusField} onBlur={handleBlurField((e) => handleItemBlur(item.id, e))} placeholder="Manzana" readOnly={item.isCanceled || currentOrderIsDeleted} isCanceledProp={item.isCanceled || currentOrderIsDeleted} {...(isAppleSpecies(item.especie) ? { list: "apple-varieties" } : {})} />
-                  </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="font-semibold text-gray-500 w-1/2">Variedad:</span>
-                    <TableInput name="variedad" value={item.variedad} onChange={(e) => handleItemChange(item.id, e)} onFocus={handleFocusField} onBlur={handleBlurField((e) => handleItemBlur(item.id, e))} placeholder="Galas" readOnly={item.isCanceled || currentOrderIsDeleted} isCanceledProp={item.isCanceled || currentOrderIsDeleted} {...(isAppleSpecies(item.especie) ? { list: "apple-varieties" } : {})} />
-                  </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="font-semibold text-gray-500 w-1/2">Formato:</span>
-                    <TableInput name="formato" value={item.formato} onChange={(e) => handleItemChange(item.id, e)} onFocus={handleFocusField} onBlur={handleBlurField((e) => handleItemBlur(item.id, e))} placeholder="20 Kg" readOnly={item.isCanceled || currentOrderIsDeleted} isCanceledProp={item.isCanceled || currentOrderIsDeleted} />
-                  </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="font-semibold text-gray-500 w-1/2">Calibre:</span>
-                    <TableInput name="calibre" value={item.calibre} onChange={(e) => handleItemChange(item.id, e)} onFocus={handleFocusField} onBlur={handleBlurField((e) => handleItemBlur(item.id, e))} placeholder="100;113" readOnly={item.isCanceled || currentOrderIsDeleted} isCanceledProp={item.isCanceled || currentOrderIsDeleted} />
-                  </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="font-semibold text-gray-500 w-1/2">Categoría:</span>
-                    <TableInput name="categoria" value={item.categoria} onChange={(e) => handleItemChange(item.id, e)} onFocus={handleFocusField} onBlur={handleBlurField((e) => handleItemBlur(item.id, e))} placeholder="PRE:XFY" readOnly={item.isCanceled || currentOrderIsDeleted} isCanceledProp={item.isCanceled || currentOrderIsDeleted} />
-                  </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="font-semibold text-gray-500 w-1/2">Precios {headerInfo.incoterm || "FOB"}:</span>
-                    <TableInput name="preciosFOB" value={item.preciosFOB} onChange={(e) => handleItemChange(item.id, e)} onFocus={handleFocusField} onBlur={handleBlurField((e) => handleItemBlur(item.id, e))} placeholder="$14" readOnly={item.isCanceled || currentOrderIsDeleted} isCanceledProp={item.isCanceled || currentOrderIsDeleted} />
-                  </div>
-                </div>
-              ))}
-              <div className="bg-blue-100 border border-blue-200 rounded-lg py-2 px-3 shadow-sm text-center font-bold text-base text-blue-800 mt-4">
-                Total de Pallets: {currentOrderTotalPallets} Pallets
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Action Buttons */}
-        <div className="flex flex-col sm:flex-row justify-center gap-4 mt-6">
-          <button
-            onClick={handleAddOrder}
-            className="flex items-center justify-center px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition duration-150 ease-in-out transform hover:scale-105 w-full sm:w-auto"
-            title="Crear un nuevo pedido en blanco"
-            disabled={currentOrderIsDeleted}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clipRule="evenodd" />
-            </svg>
-            Agregar Pedido
-          </button>
-
-          <button
-            onClick={handleDeleteCurrentOrder}
-            disabled={displayedOrders.length <= 1 || currentOrderIsDeleted}
-            className={`flex items-center justify-center px-6 py-3 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition duration-150 ease-in-out transform hover:scale-105 w-full sm:w-auto ${displayedOrders.length <= 1 || currentOrderIsDeleted ? "opacity-50 cursor-not-allowed" : ""}`}
-            title="Eliminar el pedido actual"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 011-1h4a1 1 0 110 2H8a1 1 0 01-1-1zm2 3a1 1 0 011-1h4a1 1 0 110 2H8a1 1 0 01-1-1zm-1 4a1 1 0 002 0v-4a1 1 0 00-2 0v4z" />
-            </svg>
-            Eliminar Pedido
-          </button>
-
-          <button
-            onClick={handleFinalizeOrder}
-            className="flex items-center justify-center px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-150 ease-in-out transform hover:scale-105 w-full sm:w-auto"
-            title="Finalizar el pedido y ver opciones de envío"
-            disabled={currentOrderIsDeleted}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-            </svg>
-            Finalizar Pedido
-          </button>
-        </div>
-
-        {/* Unified Order Actions Modal */}
-        {showOrderActionsModal && (
-          <div className="fixed inset-0 bg-gray-600/75 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-screen-lg mx-auto my-8 relative flex flex-col max-h-[90vh]">
-              <h2 className="text-xl font-bold mb-4 text-gray-800 text-center">
-                Opciones de Pedido Finalizado
-              </h2>
-
-              {!isShowingPreview && (
-                <h3 className="text-sm text-gray-600 text-center mb-4 leading-relaxed">
-                  <strong>Instrucción importante:</strong> Después de enviar el
-                  email, abre tu aplicación de correo y pega (Ctrl+V o Cmd+V) el
-                  contenido manualmente en el cuerpo del mensaje.
-                </h3>
-              )}
-
-              {!isShowingPreview ? (
-                <div className="flex justify-center gap-4 mb-4 flex-wrap sm:flex-nowrap">
-                  <button
-                    onClick={handlePreviewOrder}
-                    className="flex items-center justify-center px-4 py-2 text-sm bg-gray-600 text-white font-semibold rounded-lg shadow-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition duration-150 ease-in-out transform hover:scale-105 w-full sm:w-auto"
-                    title="Previsualizar el pedido completo"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M8 4a4 4 0 100 8c1.65 0 3-1.35 3-3V7a1 1 0 112 0v1a5 5 0 01-5 5H4a5 5 0 01-5-5v-1c0-1.65 1.35-3 3-3h1V4a1 1 0 11-2 0V3h-1a1 1 0 110-2h1a1 1 0 011 1v1h1a1 1 0 011 1V4zm0 2a2 2 0 100 4 2 2 0 000-4z" clipRule="evenodd" />
-                    </svg>
-                    Previsualizar
-                  </button>
-                  <button
-                    onClick={performSendEmail}
-                    className="flex items-center justify-center px-4 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-150 ease-in-out transform hover:scale-105 w-full sm:w-auto"
-                    title="Copiar contenido y abrir cliente de correo"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                      <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
-                      <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
-                    </svg>
-                    Enviar Email
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <h3 className="text-lg font-semibold mb-3 text-gray-800 text-center">
-                    Previsualización del Pedido
-                  </h3>
-                  <div className="bg-gray-50 rounded-md border border-gray-200 flex-grow overflow-hidden" style={{minHeight: "300px"}}>
-                    <iframe
-                      srcDoc={previewHtmlContent}
-                      sandbox="" /* v51.5: sin scripts ni same-origin; el preview es HTML estático */
-                      style={{width:"100%", height:"100%", minHeight:"360px", border:"none", display:"block"}}
-                      title="Previsualización del pedido"
-                    />
-                  </div>
-                  <div className="flex justify-center mt-3 gap-2 flex-wrap sm:flex-nowrap">
-                    <button
-                      onClick={() => setIsShowingPreview(false)}
-                      className="flex items-center justify-center px-4 py-2 text-sm bg-gray-600 text-white font-semibold rounded-lg shadow-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition duration-150 ease-in-out transform hover:scale-105 w-full sm:w-auto"
-                    >
-                      Volver a Opciones
-                    </button>
-                    <button
-                      onClick={performSendEmail}
-                      className="flex items-center justify-center px-4 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-150 ease-in-out transform hover:scale-105 w-full sm:w-auto"
-                      title="Copiar contenido y abrir cliente de correo"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
-                        <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
-                        <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
-                      </svg>
-                      Enviar Email
-                    </button>
-                  </div>
-                </>
-              )}
-
-              <div className="flex justify-center mt-4">
-                <button
-                  onClick={() => setShowOrderActionsModal(false)}
-                  className="px-6 py-3 bg-red-500 text-white font-semibold rounded-lg shadow-md hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition duration-150 ease-in-out"
-                >
-                  Cerrar
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Observation Modal */}
-        {showObservationModal && currentEditingItemData && (
-          <div className="fixed inset-0 bg-gray-600/75 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-auto relative">
-              <h2 className="text-xl font-bold mb-4 text-gray-800 text-center">
-                Editar Observación para Línea
-              </h2>
-              <div className="mb-4">
-                <label htmlFor="modalObservation" className="block text-sm font-medium text-gray-700 mb-1">
-                  Observación:
-                </label>
-                <textarea
-                  id="modalObservation"
-                  className="mt-1 block w-full rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 border transition-colors" style={{ backgroundColor: darkMode ? "#374151" : "#f9fafb", borderColor: darkMode ? "#4b5563" : "#d1d5db", color: darkMode ? "#f9fafb" : "#111827" }}
-                  rows="4"
-                  value={modalObservationText}
-                  onChange={(e) => setModalObservationText(e.target.value)}
-                  placeholder="Ingrese la observación aquí..."
-                  ref={observationTextareaRef}
-                ></textarea>
-              </div>
-              <div className="flex justify-end gap-3">
-                <button onClick={handleCloseObservationModal} className="px-4 py-2 bg-gray-300 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:ring-offset-2 transition duration-150 ease-in-out">
-                  Cancelar
-                </button>
-                <button onClick={handleSaveObservation} className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-150 ease-in-out">
-                  Guardar
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Presence Conflict Modal */}
-        {showPresenceModal && (
-          <div className="fixed inset-0 bg-gray-600/75 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-auto relative">
-              <div className="flex items-center gap-3 mb-4">
-                <span className="text-3xl">⚠️</span>
-                <h2 className="text-xl font-bold text-gray-800">Pedido en uso</h2>
-              </div>
-              <p className="text-gray-600 mb-2">
-                El pedido <span className="font-bold text-blue-600">{pendingSearchTerm}</span> está siendo editado por:
-              </p>
-              <ul className="mb-4 space-y-1">
-                {presenceConflictUsers.map((u) => (
-                  <li key={u} className="flex items-center gap-2 text-gray-700 font-medium">
-                    <span className="inline-block w-2 h-2 rounded-full bg-yellow-400"></span>
-                    {u}
-                  </li>
                 ))}
-              </ul>
-              <p className="text-sm text-gray-500 mb-6">
-                Si lo abres igual, los cambios de ambos usuarios podrían solaparse y perderse información.
-              </p>
-              <div className="flex justify-end gap-3">
-                <button onClick={() => { setShowPresenceModal(false); setPendingSearchTerm(""); setPresenceConflictUsers([]); }} className="px-4 py-2 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition">
-                  Cancelar
-                </button>
-                <button
-                  onClick={async () => {
-                    setShowPresenceModal(false);
-                    setPresenceConflictUsers([]);
-                    await enterMailId(pendingSearchTerm);
-                    setPendingSearchTerm("");
-                  }}
-                  className="px-4 py-2 bg-yellow-500 text-white font-semibold rounded-lg hover:bg-yellow-600 transition"
-                >
-                  Abrir de todas formas
-                </button>
+                <div className="flex items-baseline justify-between rounded-xl bg-surface-2 px-4 py-3 text-sm">
+                  <span className="text-muted">Total de pallets</span>
+                  <strong className="text-base text-fg tabular-nums">{formatPallets(currentOrderTotalPallets)}</strong>
+                </div>
               </div>
             </div>
-          </div>
+          </section>
         )}
 
-        <datalist id="apple-varieties">
-          <option value="GALA" />
-          <option value="GRANNY" />
-          <option value="FUJI" />
-          <option value="PINK LADY" />
-          <option value="ROJA" />
-          <option value="CRIPPS PINK" />
-        </datalist>
+        <footer className="pt-2 pb-2 text-center text-xs text-subtle">
+          {APP_VERSION} · {APP_VERSION_DATE}
+        </footer>
+      </main>
+
+      {/* ── BARRA DE ACCIONES (fija abajo) ─────────────────────────────────── */}
+      <div className="sticky bottom-0 z-20 border-t border-line bg-surface/95 backdrop-blur">
+        <div className="mx-auto flex max-w-6xl items-center gap-2 px-3 py-3 sm:px-6">
+          <Button
+            variant="danger-ghost"
+            icon="trash"
+            onClick={confirmDeleteOrder}
+            disabled={displayedOrders.length <= 1 || currentOrderIsDeleted}
+            aria-label="Eliminar pedido"
+            title={displayedOrders.length <= 1 ? "No se puede eliminar el único pedido del Mail ID" : "Eliminar el pedido actual"}
+          >
+            <span className="hidden sm:inline">Eliminar pedido</span>
+          </Button>
+          <div className="flex-1" />
+          <Button variant="secondary" icon="plus" onClick={handleAddOrder} loading={addingOrder} disabled={currentOrderIsDeleted} aria-label="Agregar pedido" title="Agregar un pedido a este Mail ID">
+            <span className="hidden sm:inline">Agregar pedido</span>
+          </Button>
+          <Button variant="primary" icon="send" onClick={handleFinalizeOrder} disabled={currentOrderIsDeleted}>
+            Finalizar pedido
+          </Button>
+        </div>
       </div>
 
-      {/* ── HISTORY PANEL (Portal) ────────────────────────────────────────────── */}
-      {showHistoryPanel && ReactDOM.createPortal(
-        <>
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.2)", zIndex: 9998 }} onClick={() => setShowHistoryPanel(false)} />
-          <div style={{ position: "fixed", top: 0, right: 0, height: "100vh", width: "320px", background: "#fff", boxShadow: "-4px 0 24px rgba(0,0,0,0.12)", zIndex: 9999, display: "flex", flexDirection: "column" }}>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-              <div className="flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <h2 className="text-base font-bold text-gray-800">Historial de envíos</h2>
-              </div>
-              <button onClick={() => setShowHistoryPanel(false)} className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-              {sentHistory.length === 0 ? (
-                <p className="text-sm text-gray-400 text-center mt-8">No hay envíos recientes.</p>
-              ) : (
-                sentHistory.map((entry) => {
-                  const proveedores = [...new Set(entry.orders.map(o => o.header?.reDestinatarios).filter(Boolean))];
-                  const especies = [...new Set(entry.orders.flatMap(o => o.items.map(i => i.especie)).filter(Boolean))];
-                  const subject = generateEmailSubjectValue(proveedores, especies, "");
-                  return (
-                    <div key={entry.mailId} className="border border-gray-100 rounded-lg p-4 bg-gray-50 space-y-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className="text-xs text-gray-400 mb-0.5">Mail ID</p>
-                          <p className="font-bold text-blue-600 text-sm tracking-wide">{entry.mailId}</p>
-                        </div>
-                        <span className="text-xs text-gray-400 whitespace-nowrap mt-1">{formatRelativeTime(entry.latestUpdatedAt)}</span>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-400 mb-0.5">Asunto</p>
-                        <p className="text-xs text-gray-700 font-medium break-all leading-snug">{subject}</p>
-                      </div>
-                      <div className="text-xs text-gray-400">
-                        {entry.orders.length} pedido{entry.orders.length > 1 ? "s" : ""}
-                        {entry.orders[0]?.header?.reDestinatarios ? ` · ${entry.orders[0].header.reDestinatarios}` : ""}
-                      </div>
-                      <div className="flex gap-2 pt-1">
-                        <button onClick={async () => { setShowHistoryPanel(false); setSearchTerm(entry.mailId); setCommittedSearchTerm(entry.mailId); await enterMailId(entry.mailId); }} className="flex-1 px-3 py-1.5 text-xs font-semibold bg-white border border-gray-200 text-gray-700 rounded-md hover:bg-gray-100 transition">
-                          Ver pedido
-                        </button>
-                        <button onClick={() => resendFromHistory(entry.mailId)} disabled={historyResendingId === entry.mailId} className="flex-1 px-3 py-1.5 text-xs font-semibold bg-blue-600 text-white rounded-md hover:bg-blue-700 transition disabled:opacity-50 flex items-center justify-center gap-1">
-                          {historyResendingId === entry.mailId ? (
-                            <><svg className="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg> Copiando...</>
-                          ) : (
-                            <><svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z"/><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z"/></svg> Re-enviar</>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-            <div className="px-4 py-3 border-t border-gray-100">
-              <p className="text-xs text-gray-400 text-center">
-                Últimos {sentHistory.length} envío{sentHistory.length !== 1 ? "s" : ""} · Solo los tuyos
-              </p>
-            </div>
+      {/* ── MODAL: FINALIZAR / PREVISUALIZAR / ENVIAR ──────────────────────── */}
+      <Modal
+        open={showOrderActionsModal}
+        onClose={() => { if (!isSending) setShowOrderActionsModal(false); }}
+        dismissable={!isSending}
+        title={isShowingPreview ? "Previsualización del correo" : "Enviar pedido"}
+        icon={isShowingPreview ? "eye" : "send"}
+        size={isShowingPreview ? "xl" : "md"}
+        footer={
+          isShowingPreview ? (
+            <>
+              <Button variant="secondary" icon="chevronLeft" onClick={() => setIsShowingPreview(false)} disabled={isSending}>Volver</Button>
+              <Button variant="primary" icon="send" onClick={performSendEmail} loading={isSending}>Enviar email</Button>
+            </>
+          ) : (
+            <>
+              <Button variant="ghost" onClick={() => setShowOrderActionsModal(false)} disabled={isSending}>Cerrar</Button>
+              <Button variant="secondary" icon="eye" onClick={handlePreviewOrder} loading={isPreviewing} disabled={isSending}>Previsualizar</Button>
+              <Button variant="primary" icon="send" onClick={performSendEmail} loading={isSending}>Enviar email</Button>
+            </>
+          )
+        }
+      >
+        {isShowingPreview ? (
+          <div className="overflow-hidden rounded-lg border border-line bg-white">
+            <iframe
+              srcDoc={previewHtmlContent}
+              sandbox="" /* v51.5: sin scripts ni same-origin; el preview es HTML estático */
+              className="block h-[62vh] w-full border-0"
+              title="Previsualización del pedido"
+            />
           </div>
-        </>,
-        document.body
-      )}
-
-      {/* ── WHAT'S NEW MODAL (una sola vez por versión) ────────────────────────── */}
-      {showWhatsNew && ReactDOM.createPortal(
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.5)" }}>
-          <div className="rounded-2xl shadow-2xl w-full max-w-sm p-6" style={{ background: "#ffffff" }}>
-            <div className="flex items-center gap-3 mb-4">
-              <span style={{ fontSize: "28px" }}>🚀</span>
-              <div>
-                <h2 className="text-base font-bold text-gray-800">
-                  Novedades de esta versión
-                </h2>
-                <p className="text-xs text-gray-400">Frutam · {WHATSNEW_VERSION}</p>
-              </div>
-            </div>
-
-            <ul className="space-y-3 mb-6">
+        ) : (
+          <div className="space-y-4 text-sm">
+            <p className="text-fg-2">
+              Se enviarán todos los pedidos del Mail ID <strong className="font-mono text-fg">{headerInfo.mailId || "—"}</strong>.
+            </p>
+            <ol className="space-y-2.5">
               {[
-                {
-                  icon: "🔄",
-                  title: "Cambio global de FOB / FOT",
-                  desc: "Ahora puedes cambiar entre FOB y FOT con un solo clic y aplicar el cambio a todos los pedidos de la operación, sin necesidad de modificarlos uno por uno.",
-                },
-              ].map(({ icon, title, desc }) => (
-                <li key={title} className="flex gap-3 items-start">
-                  <span className="text-lg mt-0.5">{icon}</span>
-                  <div>
-                    <p className="text-sm font-semibold text-gray-700">{title}</p>
-                    <p className="text-xs text-gray-500 leading-snug">{desc}</p>
-                  </div>
+                "Se copia el correo completo al portapapeles.",
+                `Se abre ${emailClientLabel} con el asunto listo.`,
+                "Pega el contenido en el cuerpo del mensaje con Ctrl+V (Cmd+V en Mac).",
+              ].map((t, i) => (
+                <li key={i} className="flex items-start gap-3">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary-soft text-xs font-bold text-primary">{i + 1}</span>
+                  <span className="pt-0.5 text-fg-2">{t}</span>
                 </li>
               ))}
-            </ul>
-            <button
-              onClick={() => {
-                safeStorageSet(WHATSNEW_KEY, "seen");
-                setShowWhatsNew(false);
-              }}
-              className="w-full py-2.5 rounded-xl text-sm font-bold text-white transition-colors hover:opacity-90"
-              style={{ background: "#2563eb" }}
-            >
-              Entendido
-            </button>
+            </ol>
           </div>
-        </div>,
-        document.body
-      )}
+        )}
+      </Modal>
 
-      {/* ── CONFIG PANEL (Portal) ─────────────────────────────────────────────── */}
-      {showConfigPanel && ReactDOM.createPortal(
-        <>
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.2)", zIndex: 9998 }} onClick={() => setShowConfigPanel(false)} />
-          <div style={{ position: "fixed", top: 0, right: 0, height: "100vh", width: "300px", background: darkMode ? "#1f2937" : "#fff", boxShadow: "-4px 0 24px rgba(0,0,0,0.12)", zIndex: 9999, display: "flex", flexDirection: "column" }}>
-            <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: `1px solid ${darkMode ? "#374151" : "#f3f4f6"}` }}>
-              <div className="flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" style={{ color: darkMode ? "#9ca3af" : "#6b7280" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                <h2 className="text-base font-bold" style={{ color: darkMode ? "#f9fafb" : "#1f2937" }}>Configuración</h2>
-              </div>
-              <button onClick={() => setShowConfigPanel(false)} className="p-1 rounded transition-colors" style={{ color: darkMode ? "#6b7280" : "#9ca3af" }}>
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
-              </button>
-            </div>
-            <div className="flex-1 px-5 py-5 space-y-6" style={{ overflowY: "auto" }}>
+      {/* ── MODAL: OBSERVACIÓN ─────────────────────────────────────────────── */}
+      <Modal
+        open={showObservationModal && !!currentEditingItemData}
+        onClose={handleCloseObservationModal}
+        title="Observación de la fila"
+        icon="note"
+        size="md"
+        initialFocus={observationTextareaRef}
+        footer={
+          <>
+            <Button variant="secondary" onClick={handleCloseObservationModal}>Cancelar</Button>
+            <Button variant="primary" onClick={handleSaveObservation}>Guardar</Button>
+          </>
+        }
+      >
+        <label htmlFor="modalObservation" className="label">Observación</label>
+        <textarea
+          id="modalObservation"
+          className="field min-h-28 resize-y"
+          rows={4}
+          value={modalObservationText}
+          onChange={(e) => setModalObservationText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleSaveObservation(); }}
+          placeholder="Ej. Embarque sujeto a confirmación de espacio"
+          ref={observationTextareaRef}
+        />
+        <p className="mt-2 text-xs text-muted">Se incluye en “Observaciones” del correo. Ctrl+Enter para guardar.</p>
+      </Modal>
 
-              {/* ── DARK MODE TOGGLE ── */}
-              <div>
-                <p className="text-sm font-semibold mb-1" style={{ color: darkMode ? "#d1d5db" : "#374151" }}>Apariencia</p>
-                <p className="text-xs mb-3" style={{ color: darkMode ? "#6b7280" : "#9ca3af" }}>Cambia entre modo claro y oscuro</p>
-                <button
-                  onClick={toggleDarkMode}
-                  className="w-full flex items-center justify-between px-4 py-3 rounded-lg border transition-all"
-                  style={{
-                    backgroundColor: darkMode ? "#374151" : "#f9fafb",
-                    borderColor: darkMode ? "#4b5563" : "#e5e7eb",
-                  }}
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-lg">{darkMode ? "🌙" : "☀️"}</span>
-                    <span className="text-sm font-semibold" style={{ color: darkMode ? "#f9fafb" : "#374151" }}>
-                      {darkMode ? "Modo oscuro" : "Modo claro"}
-                    </span>
+      {/* ── MODAL: MAIL ID EN USO ──────────────────────────────────────────── */}
+      <Modal
+        open={showPresenceModal}
+        onClose={() => { setShowPresenceModal(false); setPendingSearchTerm(""); setPresenceConflictUsers([]); }}
+        title="Mail ID en uso"
+        icon="users"
+        size="sm"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => { setShowPresenceModal(false); setPendingSearchTerm(""); setPresenceConflictUsers([]); }}>Cancelar</Button>
+            <Button
+              variant="primary"
+              onClick={async () => {
+                setShowPresenceModal(false);
+                setPresenceConflictUsers([]);
+                await enterMailId(pendingSearchTerm);
+                setPendingSearchTerm("");
+              }}
+            >
+              Abrir de todas formas
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-2">
+          El Mail ID <strong className="font-mono text-fg">{pendingSearchTerm}</strong> está siendo editado por:
+        </p>
+        <ul className="my-3 space-y-1">
+          {presenceConflictUsers.map((u) => (
+            <li key={u} className="flex items-center gap-2 text-sm font-medium text-fg">
+              <span className="h-2 w-2 rounded-full bg-warning" />{u}
+            </li>
+          ))}
+        </ul>
+        <p className="text-xs text-muted">Si lo abres igual, los cambios de ambos podrían solaparse y perderse información.</p>
+      </Modal>
+
+      <datalist id="apple-varieties">
+        <option value="GALA" />
+        <option value="GRANNY" />
+        <option value="FUJI" />
+        <option value="PINK LADY" />
+        <option value="ROJA" />
+        <option value="CRIPPS PINK" />
+      </datalist>
+
+      {/* ── PANEL: HISTORIAL DE ENVÍOS ─────────────────────────────────────── */}
+      <Modal
+        open={showHistoryPanel}
+        onClose={() => setShowHistoryPanel(false)}
+        title="Historial de envíos"
+        icon="clock"
+        drawer
+        footer={<p className="w-full text-center text-xs text-muted">Últimos {sentHistory.length} envío{sentHistory.length !== 1 ? "s" : ""} · solo los tuyos</p>}
+      >
+        {sentHistory.length === 0 ? (
+          <p className="mt-8 text-center text-sm text-muted">No hay envíos recientes.</p>
+        ) : (
+          <ul className="space-y-3">
+            {sentHistory.map((entry) => {
+              const proveedores = [...new Set(entry.orders.map((o) => o.header?.reDestinatarios).filter(Boolean))];
+              const especies = [...new Set(entry.orders.flatMap((o) => o.items.map((i) => i.especie)).filter(Boolean))];
+              const subject = generateEmailSubjectValue(proveedores, especies, "");
+              return (
+                <li key={entry.mailId} className="space-y-2 rounded-xl border border-line bg-surface-2 p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-mono text-sm font-semibold text-fg">{entry.mailId}</span>
+                    <span className="text-xs whitespace-nowrap text-muted">{formatRelativeTime(entry.latestUpdatedAt)}</span>
                   </div>
-                  {/* Toggle pill */}
-                  <div
-                    className="relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0"
-                    style={{ backgroundColor: darkMode ? "#3b82f6" : "#d1d5db" }}
-                  >
-                    <div
-                      className="absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200"
-                      style={{ transform: darkMode ? "translateX(20px)" : "translateX(2px)" }}
-                    />
-                  </div>
-                </button>
-              </div>
-
-              <div style={{ borderTop: `1px solid ${darkMode ? "#374151" : "#f3f4f6"}`, paddingTop: "1.5rem" }}>
-                <p className="text-sm font-semibold mb-1" style={{ color: darkMode ? "#d1d5db" : "#374151" }}>Cliente de correo</p>
-                <p className="text-xs mb-3" style={{ color: darkMode ? "#6b7280" : "#9ca3af" }}>¿Cómo abrir el correo al hacer "Enviar Email"?</p>
-                <div className="space-y-2">
-                  {[
-                    { value: "auto", label: "Auto-detectar", desc: "Intenta Outlook Desktop primero, abre Outlook Web si no hay app instalada", icon: "🔍" },
-                    { value: "desktop", label: "Outlook Desktop", desc: "Siempre abre la app de Outlook instalada en Windows", icon: "🖥️" },
-                    { value: "web", label: "Outlook Web", desc: "Siempre abre outlook.office.com en el navegador", icon: "🌐" }
-                  ].map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => saveEmailClientPref(opt.value)}
-                      className="w-full text-left px-4 py-3 rounded-lg border transition-all"
-                      style={{
-                        borderColor: emailClientPref === opt.value ? "#3b82f6" : darkMode ? "#4b5563" : "#e5e7eb",
-                        backgroundColor: emailClientPref === opt.value
-                          ? darkMode ? "#1e3a5f" : "#eff6ff"
-                          : darkMode ? "#374151" : "#ffffff",
+                  <p className="text-xs leading-snug break-all text-fg-2">{subject}</p>
+                  <p className="text-xs text-muted">
+                    {entry.orders.length} pedido{entry.orders.length > 1 ? "s" : ""}
+                    {entry.orders[0]?.header?.reDestinatarios ? ` · ${entry.orders[0].header.reDestinatarios}` : ""}
+                  </p>
+                  <div className="flex gap-2 pt-1">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon="eye"
+                      className="flex-1"
+                      onClick={async () => {
+                        setShowHistoryPanel(false);
+                        setSearchTerm(entry.mailId);
+                        setCommittedSearchTerm(entry.mailId);
+                        await enterMailId(entry.mailId);
                       }}
                     >
-                      <div className="flex items-center gap-2">
-                        <span className="text-base">{opt.icon}</span>
-                        <span className="text-sm font-semibold" style={{ color: emailClientPref === opt.value ? "#3b82f6" : darkMode ? "#d1d5db" : "#374151" }}>{opt.label}</span>
-                        {emailClientPref === opt.value && <span className="ml-auto text-blue-500 text-xs font-bold">✓ Activo</span>}
-                      </div>
-                      <p className="text-xs mt-1 ml-6" style={{ color: darkMode ? "#6b7280" : "#9ca3af" }}>{opt.desc}</p>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="px-5 py-3" style={{ borderTop: `1px solid ${darkMode ? "#374151" : "#f3f4f6"}` }}>
-              <p className="text-xs text-center" style={{ color: darkMode ? "#6b7280" : "#9ca3af" }}>Preferencia guardada en este dispositivo</p>
-            </div>
-          </div>
-        </>,
-        document.body
-      )}
+                      Ver pedido
+                    </Button>
+                    <Button size="sm" variant="primary" icon="copy" className="flex-1" loading={historyResendingId === entry.mailId} onClick={() => resendFromHistory(entry.mailId)}>
+                      Re-enviar
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Modal>
 
-      {/* ── AVISO DE NUEVA VERSIÓN ───────────────────────────────────────────── */}
+      {/* ── PANEL: CONFIGURACIÓN ───────────────────────────────────────────── */}
+      <Modal
+        open={showConfigPanel}
+        onClose={() => setShowConfigPanel(false)}
+        title="Configuración"
+        icon="cog"
+        drawer
+        footer={<p className="w-full text-center text-xs text-muted">Preferencias guardadas en este dispositivo · {APP_VERSION}</p>}
+      >
+        <div className="space-y-6">
+          <section>
+            <h3 className="text-sm font-semibold text-fg">Apariencia</h3>
+            <p className="mb-3 text-xs text-muted">Tema de la interfaz</p>
+            <div className="grid grid-cols-2 gap-2" role="group" aria-label="Tema">
+              {[
+                { dark: false, label: "Modo claro", icon: "sun" },
+                { dark: true, label: "Modo oscuro", icon: "moon" },
+              ].map((opt) => {
+                const active = darkMode === opt.dark;
+                return (
+                  <button
+                    key={opt.label}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => { if (!active) toggleDarkMode(); }}
+                    className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors ${
+                      active ? "border-primary bg-primary-soft text-primary" : "border-line-strong text-fg-2 hover:bg-surface-2"
+                    }`}
+                  >
+                    <Icon name={opt.icon} className="h-4 w-4" />
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="border-t border-line pt-5">
+            <h3 className="text-sm font-semibold text-fg">Cliente de correo</h3>
+            <p className="mb-3 text-xs text-muted">Qué se abre al pulsar “Enviar email”</p>
+            <div className="space-y-2" role="radiogroup" aria-label="Cliente de correo">
+              {[
+                { value: "auto", label: "Detección automática", desc: "Intenta Outlook Desktop y, si no está instalado, abre Outlook Web." },
+                { value: "desktop", label: "Outlook Desktop", desc: "Siempre abre la aplicación de Outlook instalada." },
+                { value: "web", label: "Outlook Web", desc: "Siempre abre outlook.office.com en el navegador." },
+              ].map((opt) => {
+                const active = emailClientPref === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => saveEmailClientPref(opt.value)}
+                    className={`w-full rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                      active ? "border-primary bg-primary-soft" : "border-line-strong hover:bg-surface-2"
+                    }`}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <span className={`text-sm font-semibold ${active ? "text-primary" : "text-fg"}`}>{opt.label}</span>
+                      {active && <Icon name="check" className="h-4 w-4 text-primary" />}
+                    </span>
+                    <span className="mt-0.5 block text-xs text-muted">{opt.desc}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="border-t border-line pt-5">
+            <h3 className="text-sm font-semibold text-fg">Sesión</h3>
+            <p className="mt-1 mb-3 flex items-center gap-1.5 text-xs text-muted" title={userId ? `ID: ${userId}` : undefined}>
+              <Icon name="user" className="h-4 w-4" />
+              Identificador: <span className="font-mono">{userId ? userId.substring(0, 8).toUpperCase() : "—"}</span>
+            </p>
+            <Button size="sm" variant="secondary" icon="refresh" onClick={confirmReloadSession}>Recargar aplicación</Button>
+          </section>
+        </div>
+      </Modal>
+
+      {/* ── MODAL: NOVEDADES (una vez por versión) ─────────────────────────── */}
+      <Modal
+        open={showWhatsNew}
+        onClose={() => { safeStorageSet(WHATSNEW_KEY, "seen"); setShowWhatsNew(false); }}
+        title={`Novedades · ${WHATSNEW_VERSION}`}
+        icon="sparkles"
+        size="sm"
+        footer={
+          <Button variant="primary" className="w-full" onClick={() => { safeStorageSet(WHATSNEW_KEY, "seen"); setShowWhatsNew(false); }}>
+            Entendido
+          </Button>
+        }
+      >
+        <ul className="space-y-4">
+          {[
+            { icon: "sparkles", title: "Nueva interfaz", desc: "Diseño más limpio, modo oscuro completo y pestañas para moverte entre los pedidos del mismo Mail ID." },
+            { icon: "checkCircle", title: "Avisos de guardado", desc: "Verás cuándo se guardan tus cambios y un aviso claro si algo falla al guardar o enviar." },
+            { icon: "chevronRight", title: "Teclado y celular", desc: "Las flechas respetan el cursor dentro del texto y en el celular puedes reordenar filas con ↑ ↓." },
+          ].map(({ icon, title, desc }) => (
+            <li key={title} className="flex items-start gap-3">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary-soft text-primary"><Icon name={icon} className="h-4 w-4" /></span>
+              <div>
+                <p className="text-sm font-semibold text-fg">{title}</p>
+                <p className="text-xs leading-snug text-muted">{desc}</p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </Modal>
+
+      {/* ── AVISO DE NUEVA VERSIÓN ─────────────────────────────────────────── */}
       {updateAvailable && (
-        <div style={{
-          position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)",
-          zIndex: 10000, background: "#2563eb", color: "#fff",
-          padding: "10px 16px", borderRadius: 10, boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
-          display: "flex", alignItems: "center", gap: 12, fontSize: 14,
-        }}>
-          <span>🚀 Hay una nueva versión disponible</span>
+        <div className="fixed top-3 left-1/2 z-[70] flex -translate-x-1/2 items-center gap-3 rounded-xl bg-primary px-4 py-2.5 text-sm text-primary-fg shadow-lg" role="status">
+          <Icon name="sparkles" className="h-4 w-4" />
+          <span>Hay una nueva versión disponible</span>
           <button
-            onClick={async () => { await flushAndSave(); window.location.reload(); }}
-            style={{ background: "#fff", color: "#2563eb", fontWeight: 700, border: "none", borderRadius: 6, padding: "4px 12px", cursor: "pointer" }}
+            type="button"
+            onClick={async () => { try { await flushAndSave(); } catch { /* recarga igual */ } window.location.reload(); }}
+            className="rounded-md bg-primary-fg px-3 py-1 text-xs font-bold text-primary"
           >
             Actualizar
           </button>
         </div>
       )}
 
-      {/* ── v51.7: AVISO DE ENTORNO DE PRUEBAS (solo fuera de producción) ───── */}
-      {ENV_LABEL && (
-        <div
-          role="status"
-          style={{
-            position: "fixed", top: 0, left: 0, right: 0, zIndex: 10001,
-            background: "#b45309", color: "#fff", textAlign: "center",
-            fontSize: "12px", fontWeight: 700, padding: "3px 8px", letterSpacing: "0.02em",
-          }}
-        >
-          ENTORNO DE {ENV_LABEL} · base de datos: {firebaseConfig.projectId || "sin configurar"} · no usar para pedidos reales
-        </div>
-      )}
-
-      {/* ── VERSION FOOTER ───────────────────────────────────────────────────── */}
-      <div style={{
-        position: "fixed",
-        bottom: "8px",
-        left: "50%",
-        transform: "translateX(-50%)",
-        fontSize: "11px",
-        color: darkMode ? "#4b5563" : "#9ca3af",
-        pointerEvents: "none",
-        userSelect: "none",
-        whiteSpace: "nowrap",
-        zIndex: 10,
-      }}>
-        {APP_VERSION} · {APP_VERSION_DATE}
-      </div>
+      {confirmEl}
+      {toastsEl}
     </div>
   );
 };
