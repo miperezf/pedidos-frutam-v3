@@ -74,7 +74,9 @@ const db = getFirestore(app);
 //  v52.9 campo Asunto con la misma altura que el resto
 //  v53.0 números de pedido + "Agregar pedido" centrados sobre la tabla de ítems
 //        (Anterior / Pedido N de M / Siguiente se mantienen arriba)
-const APP_VERSION = "v53.0";
+//  v53.1 botón "Directo" junto a Exporta (Sí = azul / No = blanco). Por ahora solo en
+//        pantalla: la lógica y el guardado se definen en la siguiente iteración
+const APP_VERSION = "v53.1";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -310,6 +312,8 @@ const App = () => {
   const [addingOrder, setAddingOrder] = useState(false);
   const addingOrderRef = useRef(false);
   const [showRowHelp, setShowRowHelp] = useState(false); // v52.2: ayuda de acciones de fila
+  // v53.1: "Directo" por pedido (id → true/false). Solo en memoria hasta definir su lógica.
+  const [directoByOrder, setDirectoByOrder] = useState({});
   // v52.8: perfil y ajustes en panel lateral (Modal drawer: Esc y foco incluidos)
 
   // v52.1: diagnóstico de conexión (se muestra en pantalla y en Configuración)
@@ -3495,7 +3499,47 @@ const App = () => {
               <InputField label="País" name="deNombrePais" value={headerInfo.deNombrePais} onChange={handleHeaderChange} onFocus={handleFocusField} onBlur={handleBlurField(handleHeaderBlur)} placeholder="País de destino" ref={(el) => (headerInputRefs.current.deNombrePais = el)} readOnly={currentOrderIsDeleted} />
               <InputField label="Nave" name="nave" value={headerInfo.nave} onChange={handleHeaderChange} onFocus={handleFocusField} onBlur={handleBlurField(handleHeaderBlur)} placeholder="Nombre de la nave" ref={(el) => (headerInputRefs.current.nave = el)} readOnly={currentOrderIsDeleted} />
               <InputField label="Fecha de carga" name="fechaCarga" type="date" value={headerInfo.fechaCarga} onChange={handleHeaderChange} onFocus={handleFocusField} onBlur={handleBlurField(handleHeaderBlur)} ref={(el) => (headerInputRefs.current.fechaCarga = el)} readOnly={currentOrderIsDeleted} />
-              <InputField label="Exporta" name="exporta" value={headerInfo.exporta} onChange={handleHeaderChange} onFocus={handleFocusField} onBlur={handleBlurField(handleHeaderBlur)} placeholder="Exportadora" ref={(el) => (headerInputRefs.current.exporta = el)} readOnly={currentOrderIsDeleted} />
+              {/* v53.1: Exporta + botón Directo (mismo formato que Proveedor + FOB/FOT) */}
+              <div className="min-w-0">
+                <div className="mb-1.5 flex h-6 items-center justify-between gap-2">
+                  <label htmlFor="exporta" className="label mb-0">Exporta</label>
+                  {(() => {
+                    const directo = !!directoByOrder[activeOrderId];
+                    return (
+                      <div className={`inline-flex overflow-hidden rounded-md border border-line-strong ${currentOrderIsDeleted ? "pointer-events-none opacity-50" : ""}`}>
+                        <button
+                          type="button"
+                          aria-pressed={directo}
+                          aria-label={`Directo: ${directo ? "Sí" : "No"}`}
+                          title={`Directo: ${directo ? "Sí" : "No"} (clic para cambiar)`}
+                          onClick={() => {
+                            if (currentOrderIsDeleted || !activeOrderId) return;
+                            setDirectoByOrder((prev) => ({ ...prev, [activeOrderId]: !prev[activeOrderId] }));
+                          }}
+                          disabled={currentOrderIsDeleted}
+                          className={`px-2.5 py-0.5 text-xs leading-4 font-semibold transition-colors ${directo ? "bg-primary text-primary-fg" : "bg-surface text-muted hover:bg-surface-2 hover:text-fg"}`}
+                        >
+                          Directo
+                        </button>
+                      </div>
+                    );
+                  })()}
+                </div>
+                <input
+                  type="text"
+                  id="exporta"
+                  name="exporta"
+                  value={headerInfo.exporta === null || headerInfo.exporta === undefined ? "" : String(headerInfo.exporta)}
+                  onChange={handleHeaderChange}
+                  onFocus={handleFocusField}
+                  onBlur={handleBlurField(handleHeaderBlur)}
+                  placeholder="Exportadora"
+                  className="field"
+                  ref={(el) => (headerInputRefs.current.exporta = el)}
+                  readOnly={currentOrderIsDeleted}
+                  autoComplete="off"
+                />
+              </div>
               <InputField label="Asunto del email (automático)" name="emailSubject" value={headerInfo.emailSubject} onChange={handleHeaderChange} onBlur={handleHeaderBlur} ref={(el) => (headerInputRefs.current.emailSubject = el)} readOnly={true} className="font-mono" />
             </div>
 
