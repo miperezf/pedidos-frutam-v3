@@ -59,7 +59,9 @@ const db = getFirestore(app);
 //  v52.2 observación solo en la 1ª fila (por pedido), total de pallets en negrita a
 //        la derecha, ayuda de acciones en botón (i), "Agregar fila" visible bajo la
 //        tabla, tabla con margen dentro de la tarjeta, sin textos de relleno
-const APP_VERSION = "v52.2";
+//  v52.3 tabla compacta (filas más bajas, huincha de total delgada), "+" verde para
+//        duplicar, sin botón "Agregar fila", cabecera Acciones centrada
+const APP_VERSION = "v52.3";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -3053,19 +3055,22 @@ const App = () => {
     { name: "preciosFOB", label: `Precios ${headerInfo.incoterm || "FOB"}`, placeholder: "$14" },
   ];
 
-  const rowActions = (item, index, compact = false) => (
+  const rowActions = (item, index, compact = false) => {
+    // v52.3: en escritorio íconos más chicos (xs) para filas más bajas
+    const sz = compact ? "sm" : "xs";
+    return (
     <>
       {compact && (
         <>
-          <IconButton size="sm" label="Subir fila" icon="chevronUp" disabled={index === 0 || currentOrderIsDeleted} onClick={() => handleDragReorder(index, index - 1)} />
-          <IconButton size="sm" label="Bajar fila" icon="chevronDown" disabled={index === orderItems.length - 1 || currentOrderIsDeleted} onClick={() => handleDragReorder(index, index + 1)} />
+          <IconButton size={sz} label="Subir fila" icon="chevronUp" disabled={index === 0 || currentOrderIsDeleted} onClick={() => handleDragReorder(index, index - 1)} />
+          <IconButton size={sz} label="Bajar fila" icon="chevronDown" disabled={index === orderItems.length - 1 || currentOrderIsDeleted} onClick={() => handleDragReorder(index, index + 1)} />
         </>
       )}
       {/* v52.2: la observación es por pedido → solo en la 1ª fila. En otras filas
           solo aparece si ya tienen una observación antigua (para verla o borrarla). */}
       {index === 0 || (item.estado && item.estado !== "CANCELADO") ? (
         <IconButton
-          size="sm"
+          size={sz}
           icon="note"
           tone="primary"
           className={item.estado && item.estado !== "CANCELADO" ? "bg-primary-soft" : ""}
@@ -3074,11 +3079,11 @@ const App = () => {
           disabled={currentOrderIsDeleted}
         />
       ) : (
-        <span className="h-8 w-8 shrink-0" aria-hidden="true" />
+        <span className={`${compact ? "h-8 w-8" : "h-7 w-7"} shrink-0`} aria-hidden="true" />
       )}
-      <IconButton size="sm" icon="duplicate" tone="success" label="Duplicar fila" onClick={() => handleAddItem(item.id)} disabled={currentOrderIsDeleted} />
+      <IconButton size={sz} icon="plus" tone="success" label="Duplicar fila" onClick={() => handleAddItem(item.id)} disabled={currentOrderIsDeleted} />
       <IconButton
-        size="sm"
+        size={sz}
         icon={item.isCanceled ? "undo" : "ban"}
         tone="warning"
         label={item.isCanceled ? "Revertir cancelación" : "Cancelar fila"}
@@ -3086,7 +3091,7 @@ const App = () => {
         disabled={currentOrderIsDeleted}
       />
       <IconButton
-        size="sm"
+        size={sz}
         icon="trash"
         tone="dangerSolid"
         label={orderItems.length <= 1 ? "No se puede eliminar la última fila" : "Eliminar fila"}
@@ -3094,20 +3099,8 @@ const App = () => {
         disabled={orderItems.length <= 1 || currentOrderIsDeleted}
       />
     </>
-  );
-
-  // v52.2: "Agregar fila" visible al final de la tabla
-  const addRowButton = (
-    <button
-      type="button"
-      onClick={() => handleAddItem()}
-      disabled={currentOrderIsDeleted}
-      className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary-line bg-primary-soft/50 py-2.5 text-sm font-semibold text-primary transition-colors hover:border-primary hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-40"
-    >
-      <Icon name="plus" className="h-4 w-4" />
-      Agregar fila
-    </button>
-  );
+    );
+  };
 
   const tableInputProps = (item, field) => ({
     name: field.name,
@@ -3419,7 +3412,7 @@ const App = () => {
                         <p className="text-sm font-semibold text-fg">Acciones de fila</p>
                         {[
                           { icon: "note", cls: "text-primary", t: "Observación del pedido", d: "Solo en la primera fila. Aparece en “Observaciones” del correo." },
-                          { icon: "duplicate", cls: "text-success", t: "Duplicar", d: "Copia la fila justo debajo (sin la observación)." },
+                          { icon: "plus", cls: "text-success", t: "Duplicar", d: "Agrega una copia de la fila justo debajo (sin la observación)." },
                           { icon: "ban", cls: "text-warning", t: "Cancelar / revertir", d: "La fila sale tachada en el correo y no suma pallets." },
                           { icon: "trash", cls: "text-danger", t: "Eliminar", d: "Quita la fila del pedido." },
                           { icon: "grip", cls: "text-muted", t: "Reordenar", d: "Arrastra desde la manilla (en celular, con ↑ ↓)." },
@@ -3445,7 +3438,7 @@ const App = () => {
                       {ITEM_FIELDS.map((f) => (
                         <th key={f.name} scope="col" className={`px-2 py-2 whitespace-nowrap ${f.width || ""}`}>{f.label}</th>
                       ))}
-                      <th scope="col" className="py-2 pr-4 text-right">Acciones</th>
+                      <th scope="col" className="w-36 py-2 text-center">Acciones</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -3458,7 +3451,7 @@ const App = () => {
                           item.isCanceled || currentOrderIsDeleted ? "bg-danger-soft/60" : index % 2 === 1 ? "bg-surface-2 hover:bg-surface-3" : "bg-surface hover:bg-surface-3"
                         }`}
                       >
-                        <td className="py-1 pl-2">
+                        <td className="py-0.5 pl-2">
                           <span
                             draggable={!currentOrderIsDeleted}
                             onDragStart={() => { dragItemIndex.current = index; }}
@@ -3469,14 +3462,14 @@ const App = () => {
                               dragItemIndex.current = null;
                               dragOverIndex.current = null;
                             }}
-                            className={`flex h-8 w-6 items-center justify-center rounded text-subtle ${currentOrderIsDeleted ? "" : "cursor-grab hover:bg-surface-3 hover:text-fg active:cursor-grabbing"}`}
+                            className={`flex h-7 w-6 items-center justify-center rounded text-subtle ${currentOrderIsDeleted ? "" : "cursor-grab hover:bg-surface-3 hover:text-fg active:cursor-grabbing"}`}
                             title="Arrastrar para reordenar"
                           >
                             <Icon name="grip" className="h-4 w-4" />
                           </span>
                         </td>
                         {ITEM_FIELDS.map((f) => (
-                          <td key={f.name} className={`px-1 py-1 ${f.width || ""}`}>
+                          <td key={f.name} className={`px-1 py-0.5 ${f.width || ""}`}>
                             <TableInput
                               {...tableInputProps(item, f)}
                               ariaLabel={`${f.label}, fila ${index + 1}`}
@@ -3487,22 +3480,21 @@ const App = () => {
                             />
                           </td>
                         ))}
-                        <td className="py-1 pr-3">
-                          <div className="flex items-center justify-end gap-0.5">{rowActions(item, index)}</div>
+                        <td className="py-0.5">
+                          <div className="flex items-center justify-center gap-0.5">{rowActions(item, index)}</div>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                   <tfoot>
                     <tr className="border-t-2 border-line-strong bg-surface-3" data-testid="total-pallets">
-                      <td colSpan={9} className="px-4 py-2.5 text-right font-bold text-fg">
-                        TOTAL PALLETS: <span className="ml-1 text-base tabular-nums">{formatPallets(currentOrderTotalPallets)}</span>
+                      <td colSpan={9} className="px-4 py-1 text-right text-sm font-bold text-fg">
+                        TOTAL PALLETS: <span className="ml-1 tabular-nums">{formatPallets(currentOrderTotalPallets)}</span>
                       </td>
                     </tr>
                   </tfoot>
                 </table>
                 </div>
-                {addRowButton}
               </div>
 
               {/* Móvil: tarjetas */}
@@ -3529,9 +3521,8 @@ const App = () => {
                     )}
                   </div>
                 ))}
-                {addRowButton}
-                <div className="rounded-xl bg-surface-3 px-4 py-3 text-right text-sm font-bold text-fg">
-                  TOTAL PALLETS: <span className="ml-1 text-base tabular-nums">{formatPallets(currentOrderTotalPallets)}</span>
+                <div className="rounded-lg bg-surface-3 px-4 py-1.5 text-right text-sm font-bold text-fg">
+                  TOTAL PALLETS: <span className="ml-1 tabular-nums">{formatPallets(currentOrderTotalPallets)}</span>
                 </div>
               </div>
             </div>

@@ -104,12 +104,12 @@ export function IconButton({ label, icon, tone = "default", badge = null, size =
     warning: "text-warning hover:bg-warning-soft",
     dangerSolid: "text-danger hover:bg-danger-soft",
   };
-  const box = size === "sm" ? "h-8 w-8" : "h-9 w-9";
+  const box = size === "xs" ? "h-7 w-7" : size === "sm" ? "h-8 w-8" : "h-9 w-9";
   return (
     <button type={type} aria-label={label} title={label}
       className={`relative inline-flex ${box} shrink-0 items-center justify-center rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${tones[tone]} ${className}`}
       {...rest}>
-      <Icon name={icon} className={size === "sm" ? "h-[18px] w-[18px]" : "h-5 w-5"} />
+      <Icon name={icon} className={size === "xs" ? "h-4 w-4" : size === "sm" ? "h-[18px] w-[18px]" : "h-5 w-5"} strokeWidth={icon === "plus" ? 2.5 : 1.75} />
       {badge !== null && badge !== undefined && badge !== 0 && (
         <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-fg">
           {badge}
