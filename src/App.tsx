@@ -4,7 +4,6 @@ import { initializeApp } from "firebase/app";
 import {
   getAuth,
   signInAnonymously,
-  signInWithCustomToken,
   onAuthStateChanged,
 } from "firebase/auth";
 import {
@@ -12,10 +11,8 @@ import {
   collection,
   doc,
   getDocs,
-  addDoc,
   setDoc,
   updateDoc,
-  // deleteDoc, // Removed hard delete
   onSnapshot,
   query,
   where,
@@ -23,18 +20,15 @@ import {
   deleteDoc,
 } from "firebase/firestore";
 
-const firebaseConfig =
-  typeof __firebase_config !== "undefined"
-    ? JSON.parse(__firebase_config)
-    : {
-        apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-        authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-        projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-        storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-        messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-        appId: import.meta.env.VITE_FIREBASE_APP_ID,
-        measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
-      };
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
+};
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -53,8 +47,10 @@ const db = getFirestore(app);
 //  v51.3 ref de País (navegación con flechas) y lista de variedades para MANZANA/MANZANAS
 //  v51.4 acciones de fila respetan el modo sent (no escriben header en caliente)
 //  v51.5 escape del Mail ID en el HTML del correo/preview y iframe del preview en sandbox
-const APP_VERSION = "v51.5";
-const APP_VERSION_DATE = "19 Oct 2026";
+//  v51.6 fondo translúcido de modales (Tailwind v4), detector de versión operativo,
+//        parser tolerante en envío/preview, localStorage seguro, limpieza de restos
+const APP_VERSION = "v51.6";
+const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v51";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
 
@@ -183,6 +179,15 @@ const isAppleSpecies = (especie) => {
   return v === "MANZANA" || v === "MANZANAS";
 };
 
+// ── v51.6: localStorage puede lanzar excepción (modo privado, almacenamiento
+// bloqueado). Estas funciones nunca rompen el render.
+const safeStorageGet = (key) => {
+  try { return localStorage.getItem(key); } catch { return null; }
+};
+const safeStorageSet = (key, value) => {
+  try { localStorage.setItem(key, value); } catch { /* sin persistencia */ }
+};
+
 const EDITABLE_HEADER_FIELDS = [
   "reDestinatarios",
   "deNombrePais",
@@ -192,8 +197,7 @@ const EDITABLE_HEADER_FIELDS = [
 ];
 
 const App = () => {
-  const appId =
-    typeof __app_id !== "undefined" ? __app_id : firebaseConfig.projectId;
+  const appId = firebaseConfig.projectId;
 
   const [userId, setUserId] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
@@ -222,8 +226,6 @@ const App = () => {
   // Permite detectar qué campos editó el usuario en pedidos "sent" no activos.
   const loadedHeadersRef = useRef<Record<string, any>>({});
 
-  // ─── LAST SEND RECOVERY ─────────────────────────────────────────────────────
-
   // ─── HISTORY PANEL ──────────────────────────────────────────────────────────
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
 
@@ -231,11 +233,7 @@ const App = () => {
   // "frutam_whatsnew_v51", por lo que el modal aparecía siempre.
   // Ahora ambas operaciones usan la misma constante WHATSNEW_KEY.
   const [showWhatsNew, setShowWhatsNew] = useState(() => {
-    try {
-      return localStorage.getItem(WHATSNEW_KEY) !== "seen";
-    } catch {
-      return false;
-    }
+    return safeStorageGet(WHATSNEW_KEY) !== "seen";
   });
   const [historyResendingId, setHistoryResendingId] = useState(null);
 
@@ -245,7 +243,7 @@ const App = () => {
   // ─── EMAIL CLIENT CONFIG ─────────────────────────────────────────────────────
   const EMAIL_CLIENT_KEY = "frutam_email_client";
   const [emailClientPref, setEmailClientPref] = useState(
-    () => localStorage.getItem(EMAIL_CLIENT_KEY) || "auto"
+    () => safeStorageGet(EMAIL_CLIENT_KEY) || "auto"
   );
   const [showConfigPanel, setShowConfigPanel] = useState(false);
 
@@ -259,20 +257,17 @@ const App = () => {
   // ─── DARK MODE ───────────────────────────────────────────────────────────────
   const DARK_MODE_KEY = "frutam_dark_mode";
   const [darkMode, setDarkMode] = useState(
-    () => localStorage.getItem(DARK_MODE_KEY) === "true"
+    () => safeStorageGet(DARK_MODE_KEY) === "true"
   );
   const toggleDarkMode = () => {
     setDarkMode((prev) => {
-      localStorage.setItem(DARK_MODE_KEY, String(!prev));
+      safeStorageSet(DARK_MODE_KEY, String(!prev));
       return !prev;
     });
   };
 
-  // ─── PROFILE CRUD ────────────────────────────────────────────────────────────
-
   // ─── BUSCAR ÚLTIMO PEDIDO DE PROVEEDOR ───────────────────────────────────────
   const lookupLastOrderForProveedor = async (proveedorName) => {
-    const TAG = "[PRELOAD]";
     const name = (proveedorName || "").trim();
 
     const nameLower = name.toLowerCase();
@@ -364,7 +359,6 @@ const App = () => {
     if (!proveedorSuggestion) return;
     if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
 
-    const TAG = "[PRELOAD]";
     // Fill table with all fields — only reset estado and isCanceled
     const newItems = proveedorSuggestion.items.map(it => ({
       id: crypto.randomUUID(),
@@ -393,7 +387,7 @@ const App = () => {
   };
 
   const saveEmailClientPref = (pref) => {
-    localStorage.setItem(EMAIL_CLIENT_KEY, pref);
+    safeStorageSet(EMAIL_CLIENT_KEY, pref);
     setEmailClientPref(pref);
   };
 
@@ -545,16 +539,9 @@ const App = () => {
 
     const initAuth = async () => {
       try {
-        if (
-          typeof __initial_auth_token !== "undefined" &&
-          __initial_auth_token
-        ) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          // Sign in anonymously only if not already authenticated
-          if (!auth.currentUser) {
-            await signInAnonymously(auth);
-          }
+        // Sign in anonymously only if not already authenticated
+        if (!auth.currentUser) {
+          await signInAnonymously(auth);
         }
       } catch (error) {
         // Auth failure — will still attach the listener below
@@ -567,14 +554,7 @@ const App = () => {
         setIsAuthReady(true);
       } else {
         try {
-          if (
-            typeof __initial_auth_token !== "undefined" &&
-            __initial_auth_token
-          ) {
-            await signInWithCustomToken(auth, __initial_auth_token);
-          } else {
-            await signInAnonymously(auth);
-          }
+          await signInAnonymously(auth);
           setUserId(auth.currentUser?.uid ?? null);
         } catch (anonError) {
           setUserId(null);
@@ -717,7 +697,7 @@ const App = () => {
 
     const check = async () => {
       try {
-        const res = await fetch(`/version.json?t=${Date.now()}`, { cache: "no-store" });
+        const res = await fetch(`${import.meta.env.BASE_URL}version.json?t=${Date.now()}`, { cache: "no-store" });
         if (!res.ok) { first = false; return; }
         const { version } = await res.json();
         if (version === __BUILD_ID__) { first = false; return; }
@@ -1163,13 +1143,6 @@ const App = () => {
         setOrderItems(last.items);
         setCurrentOrderIndex(orders.length - 1);
 
-        console.log("[FRUTAM:SEARCH] ✅ Pedido cargado por Mail ID:", {
-          mailId,
-          totalPedidos: orders.length,
-          status:  last.header?.status,
-          exporta: last.header?.exporta,
-          nave:    last.header?.nave,
-        });
       }
     } catch (err) {
     } finally {
@@ -1253,7 +1226,6 @@ const App = () => {
     const isViewingSearchedMail = !!committedSearchTermRef.current;
 
     if (isViewingSearchedMail && activeOrderStatus === "sent") {
-      console.log("[FRUTAM:SAVE] 🛡️ SENT MODE GUARD — autosave bloqueado (ok, se usará headerInfo en el envío)");
       return;
     }
 
@@ -2076,14 +2048,6 @@ const App = () => {
       const latestHeader = headerInfoSnapshot;
       const latestItems  = orderItemsRef.current;
 
-      console.log("[FRUTAM:SEND] 📋 Header capturado para envío:", {
-        exporta:       latestHeader.exporta,
-        nave:          latestHeader.nave,
-        deNombrePais:  latestHeader.deNombrePais,
-        status:        latestHeader.status,
-        mailId:        latestHeader.mailId,
-        fuente: "headerInfo (estado React) — no ref, para capturar cambios bloqueados por SENT MODE GUARD",
-      });
 
       const mailGlobalId = latestHeader.mailId;
 
@@ -2150,11 +2114,8 @@ const App = () => {
         );
         const querySnapshot = await getDocs(q);
 
-        ordersToProcess = querySnapshot.docs.map((doc) => ({
-          id: doc.id,
-          header: doc.data().header,
-          items: JSON.parse(doc.data().items || "[]"),
-        }));
+        // v51.6: parser tolerante (un items corrupto ya no aborta el envío)
+        ordersToProcess = parseFirestoreOrders(querySnapshot.docs);
 
         ordersToProcess = ordersToProcess.filter(
           (order) => order.header?.status !== "deleted"
@@ -2253,12 +2214,6 @@ const App = () => {
               }
             });
 
-            console.log("[FRUTAM:SEND] ✅ Orden SENT (activa) — persistiendo header + items:", {
-              exporta:      latestHeader.exporta,
-              nave:         latestHeader.nave,
-              deNombrePais: latestHeader.deNombrePais,
-              incoterm:     latestHeader.incoterm,
-            });
           } else {
             // ── v51.1: pedido sent NO activo: además de items, persistir solo los
             // campos de header que el usuario cambió respecto de lo cargado.
@@ -2272,7 +2227,6 @@ const App = () => {
                 }
               });
             }
-            console.log("[FRUTAM:SEND] ✅ Orden SENT (no activa) — persistiendo items + campos de header modificados");
           }
 
           await updateDoc(orderDocRef, updatePayload);
@@ -2463,11 +2417,8 @@ const App = () => {
       );
       const querySnapshot = await getDocs(q);
 
-      ordersForPreview = querySnapshot.docs.map((doc) => ({
-        id: doc.id,
-        header: doc.data().header,
-        items: JSON.parse(doc.data().items || "[]"),
-      }));
+      // v51.6: parser tolerante (un items corrupto ya no aborta la previsualización)
+      ordersForPreview = parseFirestoreOrders(querySnapshot.docs);
 
       ordersForPreview = ordersForPreview.filter(
         (order) => order.header?.status !== "deleted"
@@ -2790,7 +2741,7 @@ const App = () => {
   // stable and eliminates the largest layout shift.
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-100 p-4 sm:p-6 lg:p-8 font-inter">
+      <div className="min-h-screen bg-gray-100 p-4 sm:p-6 lg:p-8">
         <div className="max-w-4xl mx-auto bg-white rounded-xl shadow-lg p-4 sm:p-6 space-y-6 relative">
           {/* Same header shell as real UI */}
           <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
@@ -2830,7 +2781,7 @@ const App = () => {
 
   return (
     <div
-      className="min-h-screen p-4 sm:p-6 lg:p-8 font-inter transition-colors duration-200"
+      className="min-h-screen p-4 sm:p-6 lg:p-8 transition-colors duration-200"
       style={{ backgroundColor: darkMode ? "#111827" : "#f3f4f6" }}
     >
       <div
@@ -2890,13 +2841,12 @@ const App = () => {
             src="https://www.vpcom.com/images/logo-vpc.png"
             onError={(e) => {
               e.target.onerror = null;
-              e.target.src =
-                "https://placehold.co/100x40/FFFFFF/000000?text=LogoVPC";
+              e.target.src = `${import.meta.env.BASE_URL}logo4.png`;
             }}
             alt="Logo VPC"
             width="112"
             height="45"
-            className="w-20 sm:w-24 md:w-28 h-auto object-contain rounded-md"
+            className="w-20 sm:w-24 md:w-28 h-auto max-h-[45px] object-contain rounded-md"
           />
         </div>
 
@@ -3539,7 +3489,7 @@ const App = () => {
 
         {/* Unified Order Actions Modal */}
         {showOrderActionsModal && (
-          <div className="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center p-4 z-50">
+          <div className="fixed inset-0 bg-gray-600/75 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-screen-lg mx-auto my-8 relative flex flex-col max-h-[90vh]">
               <h2 className="text-xl font-bold mb-4 text-gray-800 text-center">
                 Opciones de Pedido Finalizado
@@ -3626,7 +3576,7 @@ const App = () => {
 
         {/* Observation Modal */}
         {showObservationModal && currentEditingItemData && (
-          <div className="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center p-4 z-50">
+          <div className="fixed inset-0 bg-gray-600/75 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-auto relative">
               <h2 className="text-xl font-bold mb-4 text-gray-800 text-center">
                 Editar Observación para Línea
@@ -3657,11 +3607,9 @@ const App = () => {
           </div>
         )}
 
-        {/* Recovery Modal */}
-
         {/* Presence Conflict Modal */}
         {showPresenceModal && (
-          <div className="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center p-4 z-50">
+          <div className="fixed inset-0 bg-gray-600/75 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-auto relative">
               <div className="flex items-center gap-3 mb-4">
                 <span className="text-3xl">⚠️</span>
@@ -3814,7 +3762,7 @@ const App = () => {
             </ul>
             <button
               onClick={() => {
-                try { localStorage.setItem(WHATSNEW_KEY, "seen"); } catch {}
+                safeStorageSet(WHATSNEW_KEY, "seen");
                 setShowWhatsNew(false);
               }}
               className="w-full py-2.5 rounded-xl text-sm font-bold text-white transition-colors hover:opacity-90"
