@@ -83,7 +83,9 @@ const db = getFirestore(app);
 //  v53.4 bloque del correo centrado: columnas 50/50 con separadores finos
 //  v53.5 bloque del correo como ficha (etiqueta gris + valor); oficinas con campos separados
 //  v53.6 ficha en una columna: Dirección, RUC, Contacto, Correo, Teléfono
-const APP_VERSION = "v53.6";
+//  v53.7 correo con tamaños estándar (16 título / 14 cabecera / 13 tabla, observaciones y
+//        ficha) y proveedor único por Mail ID: al cambiarlo se aplica a todos los pedidos
+const APP_VERSION = "v53.7";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -1411,6 +1413,8 @@ const App = () => {
         [name]: value.toUpperCase(),
       }));
     }
+    // v53.7: el proveedor es único por Mail ID → se propaga al resto de pedidos
+    if (name === "reDestinatarios") syncProveedorGlobal(value);
     // v53.2: si cambia el País de un pedido Directo, se ajusta la oficina
     if (name === "deNombrePais") {
       const actual = detectarDirecto(headerInfoRef.current.exporta);
@@ -1496,6 +1500,65 @@ const App = () => {
         );
         notify("error", "No se pudo actualizar el Incoterm en todos los pedidos. Se restauró el valor anterior; inténtalo de nuevo.");
       }
+    }
+  };
+
+  // ── v53.7 PROVEEDOR GLOBAL: el proveedor es uno por Mail ID (los pedidos 2+ lo
+  // heredan y lo tienen bloqueado). Si se cambia, se aplica a todos los pedidos
+  // de la operación junto con lo que depende de él (asunto y Exporta Directo).
+  const headerConProveedor = (h, items, prov) => {
+    if (!prov || !h || h.status === "deleted") return h;
+    const oficina = detectarDirecto(h.exporta);
+    return {
+      ...h,
+      reDestinatarios: prov,
+      emailSubject: generateEmailSubjectValue([prov], [items?.[0]?.especie || ""], h.mailId),
+      exporta: oficina ? exportaDirecto(prov, oficina) : h.exporta,
+    };
+  };
+
+  const syncProveedorGlobal = async (valor) => {
+    const prov = String(valor || "").trim().toUpperCase();
+    if (!prov) return;
+    const activeId = activeOrderIdRef.current;
+    const patches = {};
+    displayedOrders.forEach((o) => {
+      if (o.id === activeId || o.header?.status === "deleted") return;
+      if ((o.header?.reDestinatarios || "") === prov) return;
+      const items = Array.isArray(o.items) ? o.items : [];
+      const nh = headerConProveedor(o.header, items, prov);
+      patches[o.id] = { reDestinatarios: nh.reDestinatarios, emailSubject: nh.emailSubject, exporta: nh.exporta };
+    });
+    const ids = Object.keys(patches);
+    if (ids.length === 0) return;
+
+    setDisplayedOrders((prev) =>
+      prev.map((o) => (patches[o.id] ? { ...o, header: { ...o.header, ...patches[o.id] } } : o))
+    );
+    notify("info", `Proveedor actualizado a ${prov} en ${ids.length === 1 ? "el otro pedido" : `los otros ${ids.length} pedidos`} de este Mail ID.`);
+
+    if (!db || !userId) return;
+    // Igual que FOB/FOT: los "sent" se persisten al enviar (SENT MODE GUARD);
+    // los borradores se escriben ahora, en un lote atómico y solo con estos campos.
+    const draftIds = ids.filter((id) => displayedOrders.find((o) => o.id === id)?.header?.status === "draft");
+    if (draftIds.length === 0) return;
+    try {
+      const batch = writeBatch(db);
+      draftIds.forEach((id) => {
+        const pt = patches[id];
+        batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, id), {
+          "header.reDestinatarios": pt.reDestinatarios,
+          "header.emailSubject": pt.emailSubject,
+          "header.exporta": pt.exporta,
+          "header.lastModifiedBy": userId,
+          "header.updatedAt": Date.now(),
+        });
+      });
+      await batch.commit();
+    } catch (error) {
+      console.error("[FRUTAM:PROVEEDOR] Error al guardar", error);
+      recordError("PROVEEDOR", error);
+      notify("error", "No se pudo guardar el proveedor en los otros pedidos. Se aplicará igualmente al enviar; revisa la conexión.");
     }
   };
 
@@ -1751,8 +1814,8 @@ const App = () => {
   // would need, based on character counts in each column. Used to find the
   // widest order so all cards can be rendered at the same width.
   const measureOrderWidth = (orderHeader, orderItemsData) => {
-    // px per character (Arial 11px ≈ 7px/char) + column padding (28px = 14px each side)
-    const PX_PER_CHAR = 7;
+    // px per character (v53.7: Arial 13px ≈ 8.5px/char; antes 11px ≈ 7) + column padding (28px = 14px each side)
+    const PX_PER_CHAR = 8.5;
     const COL_PADDING = 28;
 
     // Column headers (minimum width per column)
@@ -1805,7 +1868,7 @@ const App = () => {
     const oficinaDirecto = detectarDirecto(orderHeader.exporta);
     // v53.6: ficha con etiquetas alineadas (opción A), en una columna hacia abajo:
     // Dirección, RUC, Contacto, Correo, Teléfono
-    const directoF = "font-family:Arial,sans-serif;font-size:11px;line-height:1.4;color:#333333;mso-color-alt:#333333;text-align:left;vertical-align:top;";
+    const directoF = "font-family:Arial,sans-serif;font-size:13px;line-height:1.4;color:#333333;mso-color-alt:#333333;text-align:left;vertical-align:top;";
     const directoLab = `${directoF}font-weight:bold;color:#64748b;mso-color-alt:#64748b;padding:1px 8px 1px 0;white-space:nowrap;`;
     const directoVal = `${directoF}padding:1px 16px 1px 0;`;
     const directoRows = oficinaDirecto
@@ -1835,27 +1898,27 @@ const App = () => {
 
     // ── v18: padding duplicado para mayor legibilidad en el email ──────────────
     const thStyle =
-      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#ffffff;mso-color-alt:#ffffff;" +
+      "font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#ffffff;mso-color-alt:#ffffff;" +
       "background-color:#2563eb;padding:4px 8px;" +
       "border-top:1px solid #1e40af;border-bottom:1px solid #1e40af;" +
       "border-left:1px solid #1e40af;border-right:1px solid #1e40af;" +
       "text-align:center;white-space:nowrap;vertical-align:middle;";
 
     const tdBase =
-      "font-family:Arial,sans-serif;font-size:11px;color:#333333;mso-color-alt:#333333;" +
+      "font-family:Arial,sans-serif;font-size:13px;color:#333333;mso-color-alt:#333333;" +
       "padding:4px 8px;text-align:center;white-space:nowrap;vertical-align:middle;" +
       "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
       "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
 
     const tdTotalLabel =
-      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;mso-color-alt:#333333;" +
+      "font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#333333;mso-color-alt:#333333;" +
       "background-color:#f0f0f0;padding:6px 14px 6px 6px;text-align:right;" +
       "white-space:nowrap;vertical-align:middle;" +
       "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
       "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
 
     const tdTotalValue =
-      "font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#333333;mso-color-alt:#333333;" +
+      "font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#333333;mso-color-alt:#333333;" +
       "background-color:#f0f0f0;padding:6px 14px;text-align:center;" +
       "white-space:nowrap;vertical-align:middle;" +
       "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
@@ -1887,7 +1950,7 @@ const App = () => {
 
     return `
 <div style="margin-bottom:48px;margin-left:16px;display:inline-block;${cardWidthStyle}${orderBlockExtra}">
-<div style="font-family:Arial,sans-serif;font-size:11px;color:#333333;mso-color-alt:#333333;background-color:#f8f8f8;border:1px solid #dddddd;border-radius:8px;padding:15px;text-align:left;box-sizing:border-box;">
+<div style="font-family:Arial,sans-serif;font-size:13px;color:#333333;mso-color-alt:#333333;background-color:#f8f8f8;border:1px solid #dddddd;border-radius:8px;padding:15px;text-align:left;box-sizing:border-box;">
 
   <div style="margin-bottom:10px;">
     <p style="margin:0 0 3px 0;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;"><span style="font-weight:bold;">País:</span> ${formattedPais}</p>
@@ -1918,8 +1981,8 @@ const App = () => {
     </tbody>
   </table>
 
-  <p style="margin-top:10px;margin-bottom:0;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;">
-    Observaciones: <span style="font-weight:normal;font-style:italic;font-size:11px;font-family:Arial,sans-serif;">${consolidatedObservationsText}</span>
+  <p style="margin-top:10px;margin-bottom:0;font-family:Arial,sans-serif;font-size:13px;font-weight:bold;">
+    Observaciones: <span style="font-weight:normal;font-style:italic;font-size:13px;font-family:Arial,sans-serif;">${consolidatedObservationsText}</span>
   </p>
 ${directoBlock}
 
@@ -2342,6 +2405,13 @@ ${directoBlock}
         ...o,
         header: { ...o.header, incoterm: latestHeader.incoterm || "FOB" },
       }));
+      // v53.7: proveedor único por Mail ID (el del pedido activo, que es el global)
+      const provGlobal = String(latestHeader.reDestinatarios || "").trim().toUpperCase();
+      if (provGlobal) {
+        ordersToProcess = ordersToProcess.map((o) =>
+          o.id === activeOrderIdRef.current ? o : { ...o, header: headerConProveedor(o.header, o.items, provGlobal) }
+        );
+      }
 
       for (const order of ordersToProcess) {
         const orderDocRef = doc(
@@ -2365,6 +2435,11 @@ ${directoBlock}
           };
           if (isActiveOrder) {
             updatePayload["items"] = JSON.stringify(latestItems);
+          } else if (order.header?.reDestinatarios) {
+            // v53.7: proveedor global (y lo que depende de él) armonizado
+            updatePayload["header.reDestinatarios"] = order.header.reDestinatarios;
+            updatePayload["header.emailSubject"] = order.header.emailSubject ?? "";
+            updatePayload["header.exporta"] = order.header.exporta ?? "";
           }
           await updateDoc(orderDocRef, updatePayload);
           const idx = ordersToProcess.indexOf(order);
@@ -2658,6 +2733,14 @@ ${directoBlock}
       ...o,
       header: { ...o.header, incoterm: latestHeader.incoterm || "FOB" },
     }));
+    {
+      const provGlobal = String(latestHeader.reDestinatarios || "").trim().toUpperCase();
+      if (provGlobal) {
+        ordersForPreview = ordersForPreview.map((o) =>
+          o.id === activeOrderIdRef.current ? o : { ...o, header: headerConProveedor(o.header, o.items, provGlobal) }
+        );
+      }
+    }
 
     if (ordersForPreview.length === 0) {
       setPreviewHtmlContent(
