@@ -22,6 +22,20 @@ jobs:
         with:
           node-version: 22
 
+      - name: Verificar configuración de Firebase
+        env:
+          PID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+        run: |
+          if [ -z "$PID" ]; then
+            echo "::error::Faltan los secrets de Firebase (VITE_FIREBASE_PROJECT_ID vacío). Cárgalos en Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          if [ "${GITHUB_REPOSITORY#*/}" != "mi-proyecto-tailwindv2" ] && [ "$PID" = "pedidosfrutam-160cb" ]; then
+            echo "::error::Este repositorio de pruebas apunta a la base de datos de PRODUCCIÓN. Usa la configuración del proyecto de pruebas."
+            exit 1
+          fi
+          echo "Firebase: $PID · repo: $GITHUB_REPOSITORY"
+
       - name: Install dependencies
         run: npm install
 
