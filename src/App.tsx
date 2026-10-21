@@ -2920,6 +2920,8 @@ const App = () => {
     const code = String(err?.code || "");
     const msg = String(err?.message || "");
     if (!err) return "No hay sesión activa. Revisa que el inicio de sesión Anónimo esté habilitado en Firebase (Authentication → Método de acceso).";
+    if (/configuration-not-found/.test(code))
+      return "Authentication no está activado en este proyecto de Firebase. En Firebase: Authentication → Comenzar → Método de acceso → Anónimo → Habilitar.";
     if (/admin-restricted-operation|operation-not-allowed/.test(code))
       return "El inicio de sesión Anónimo no está habilitado. En Firebase: Authentication → Método de acceso → Anónimo → Habilitar.";
     if (/invalid-api-key|api-key-not-valid/.test(code + msg))
