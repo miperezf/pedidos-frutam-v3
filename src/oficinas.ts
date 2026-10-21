@@ -3,7 +3,8 @@
 //   pais    → como se escribe en el campo País (sin importar tildes/mayúsculas)
 //   puerto  → solo si el país tiene más de una oficina (ej. Costa Rica por puerto)
 //   nombre  → texto que va en Exporta: "[PROVEEDOR] DIRECTO A [nombre]"
-//   lineas  → datos del bloque CONSIGNEE & NOTIFY, en orden, tal como van en el correo
+//   direccion, idTipo (ej. "RUC", "CÉDULA JURÍDICA"), idNumero, contacto, correo, telefono
+//            → datos del bloque CONSIGNEE & NOTIFY (los vacíos se omiten)
 //
 // El estado "Directo" se guarda en el propio campo Exporta (no requiere campos
 // nuevos en Firestore): si Exporta termina en " DIRECTO A <etiqueta>", el pedido
@@ -14,7 +15,12 @@ export type Oficina = {
   pais: string;
   puerto?: string;
   nombre: string;
-  lineas: string[];
+  direccion: string;
+  idTipo?: string; // rótulo del identificador tributario (por defecto "RUC")
+  idNumero?: string;
+  contacto?: string;
+  correo?: string;
+  telefono?: string;
 };
 
 export const OFICINAS: Oficina[] = [
@@ -22,16 +28,28 @@ export const OFICINAS: Oficina[] = [
     id: "EC",
     pais: "ECUADOR",
     nombre: "VPCEC S.A.",
-    lineas: [
-      "KM 6 VIA DURAN BOLICHE DURAN 092411, GUAYAQUIL- ECUADOR.",
-      "RUC: 0990699119001",
-      "CONTACTO: KENIA BALLADARES",
-      "CORREO : kballadares@vpcom.com",
-      "TELEFONO : 593-95-9556958",
-    ],
+    direccion: "KM 6 VIA DURAN BOLICHE DURAN 092411, GUAYAQUIL- ECUADOR.",
+    idTipo: "RUC",
+    idNumero: "0990699119001",
+    contacto: "KENIA BALLADARES",
+    correo: "kballadares@vpcom.com",
+    telefono: "593-95-9556958",
   },
   // Pendiente: resto de oficinas (Costa Rica, una por puerto, con "puerto").
 ];
+
+/** Datos de la oficina como pares [rótulo, valor], sin los vacíos.
+ *  Orden pensado para la ficha: Dirección (fila completa), luego pares de 2 columnas. */
+export const datosOficina = (o: Oficina): [string, string][] =>
+  ([
+    ["Dirección", o.direccion],
+    [o.idTipo || "RUC", o.idNumero],
+    ["Contacto", o.contacto],
+    ["Teléfono", o.telefono],
+    ["Correo", o.correo],
+  ] as [string, string | undefined][])
+    .filter(([, v]) => String(v ?? "").trim() !== "")
+    .map(([k, v]) => [k, String(v).trim()]);
 
 /** Normaliza para comparar países: sin tildes, mayúsculas, espacios simples. */
 export const normalizarTexto = (s: unknown): string =>

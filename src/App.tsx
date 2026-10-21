@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Icon, Spinner, Button, IconButton, Badge, Modal, useConfirm, useToasts } from "./ui";
-import { detectarDirecto, exportaDirecto, oficinasDePais, normalizarTexto } from "./oficinas";
+import { detectarDirecto, exportaDirecto, oficinasDePais, normalizarTexto, datosOficina } from "./oficinas";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -81,7 +81,8 @@ const db = getFirestore(app);
 //        los campos y bloque en el correo bajo Observaciones (oficinas en oficinas.ts)
 //  v53.3 bloque del correo compacto: sin país, oficina en el título, datos en 2 columnas
 //  v53.4 bloque del correo centrado: columnas 50/50 con separadores finos
-const APP_VERSION = "v53.4";
+//  v53.5 bloque del correo como ficha (etiqueta gris + valor); oficinas con campos separados
+const APP_VERSION = "v53.5";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -1801,27 +1802,30 @@ const App = () => {
     const formattedExporta    = escapeHtml(orderHeader.exporta  || "");
     // v53.2: compra directa → Exporta destacado y bloque CONSIGNEE & NOTIFY
     const oficinaDirecto = detectarDirecto(orderHeader.exporta);
-    // v53.4: bloque compacto y centrado — sin país, oficina en el título,
-    // datos en 2 columnas iguales separadas por una línea fina
-    const directoTd =
-      "font-family:Arial,sans-serif;font-size:11px;line-height:1.4;color:#333333;mso-color-alt:#333333;text-align:center;vertical-align:middle;";
-    const directoCols = oficinaDirecto
-      ? (() => {
-          const l = oficinaDirecto.lineas.map((x) => escapeHtml(x));
-          const mitad = Math.floor(l.length / 2) || l.length;
-          return [l.slice(0, mitad), l.slice(mitad)];
-        })()
-      : [[], []];
+    // v53.5: ficha con etiquetas alineadas (opción A) — título con la oficina,
+    // Dirección en fila completa y el resto en pares etiqueta/valor de 2 columnas
+    const directoF = "font-family:Arial,sans-serif;font-size:11px;line-height:1.4;color:#333333;mso-color-alt:#333333;text-align:left;vertical-align:top;";
+    const directoLab = `${directoF}font-weight:bold;color:#64748b;mso-color-alt:#64748b;padding:1px 8px 1px 0;white-space:nowrap;`;
+    const directoVal = `${directoF}padding:1px 16px 1px 0;`;
+    const directoRows = (() => {
+      if (!oficinaDirecto) return "";
+      const d = datosOficina(oficinaDirecto).map(([k, v]) => [escapeHtml(k), escapeHtml(v)]);
+      const dir = d[0]?.[0] === "Dirección" ? d.shift() : null;
+      const rows = [];
+      if (dir) rows.push(`<tr><td style="${directoLab}">${dir[0]}</td><td style="${directoVal}" colspan="3">${dir[1]}</td></tr>`);
+      for (let k = 0; k < d.length; k += 2) {
+        const [a, b] = [d[k], d[k + 1]];
+        rows.push(`<tr><td style="${directoLab}">${a[0]}</td><td style="${directoVal}"${b ? "" : ' colspan="3"'}>${a[1]}</td>${b ? `<td style="${directoLab}">${b[0]}</td><td style="${directoVal}">${b[1]}</td>` : ""}</tr>`);
+      }
+      return rows.join("\n        ");
+    })();
     const directoBlock = oficinaDirecto
       ? `
   <table cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:100%;">
     <tr><td style="border-left:3px solid #2563eb;background-color:#eef4ff;padding:6px 10px;">
-      <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;">
-        <tr><td colspan="2" style="${directoTd}padding-bottom:4px;border-bottom:1px solid #c7d7fe;"><b>CONSIGNEE &amp; NOTIFY:</b> <b style="color:#1d4ed8;">${escapeHtml(oficinaDirecto.nombre)}</b></td></tr>
-        <tr>
-          <td width="50%" style="${directoTd}width:50%;padding:4px 8px 0 0;border-right:1px solid #c7d7fe;">${directoCols[0].join("<br>")}</td>
-          <td width="50%" style="${directoTd}width:50%;padding:4px 0 0 8px;">${directoCols[1].join("<br>")}</td>
-        </tr>
+      <p style="margin:0 0 4px 0;${directoF}"><b>CONSIGNEE &amp; NOTIFY:</b> <b style="color:#1d4ed8;mso-color-alt:#1d4ed8;">${escapeHtml(oficinaDirecto.nombre)}</b></p>
+      <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+        ${directoRows}
       </table>
     </td></tr>
   </table>`
@@ -3635,7 +3639,7 @@ ${directoBlock}
 
             {/* v53.2: panel Consignee & Notify (compra directa) */}
             {directoOficina && (() => {
-              const lineas = [directoOficina.nombre, ...directoOficina.lineas];
+              const lineas = [directoOficina.nombre, ...datosOficina(directoOficina).map(([k, v]) => (k === "Dirección" ? v : `${k.toUpperCase()}: ${v}`))];
               const mitad = Math.ceil(lineas.length / 2);
               const paisDistinto = normalizarTexto(directoOficina.pais) !== normalizarTexto(headerInfo.deNombrePais);
               return (
