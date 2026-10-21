@@ -82,7 +82,8 @@ const db = getFirestore(app);
 //  v53.3 bloque del correo compacto: sin país, oficina en el título, datos en 2 columnas
 //  v53.4 bloque del correo centrado: columnas 50/50 con separadores finos
 //  v53.5 bloque del correo como ficha (etiqueta gris + valor); oficinas con campos separados
-const APP_VERSION = "v53.5";
+//  v53.6 ficha en una columna: Dirección, RUC, Contacto, Correo, Teléfono
+const APP_VERSION = "v53.6";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -1802,23 +1803,16 @@ const App = () => {
     const formattedExporta    = escapeHtml(orderHeader.exporta  || "");
     // v53.2: compra directa → Exporta destacado y bloque CONSIGNEE & NOTIFY
     const oficinaDirecto = detectarDirecto(orderHeader.exporta);
-    // v53.5: ficha con etiquetas alineadas (opción A) — título con la oficina,
-    // Dirección en fila completa y el resto en pares etiqueta/valor de 2 columnas
+    // v53.6: ficha con etiquetas alineadas (opción A), en una columna hacia abajo:
+    // Dirección, RUC, Contacto, Correo, Teléfono
     const directoF = "font-family:Arial,sans-serif;font-size:11px;line-height:1.4;color:#333333;mso-color-alt:#333333;text-align:left;vertical-align:top;";
     const directoLab = `${directoF}font-weight:bold;color:#64748b;mso-color-alt:#64748b;padding:1px 8px 1px 0;white-space:nowrap;`;
     const directoVal = `${directoF}padding:1px 16px 1px 0;`;
-    const directoRows = (() => {
-      if (!oficinaDirecto) return "";
-      const d = datosOficina(oficinaDirecto).map(([k, v]) => [escapeHtml(k), escapeHtml(v)]);
-      const dir = d[0]?.[0] === "Dirección" ? d.shift() : null;
-      const rows = [];
-      if (dir) rows.push(`<tr><td style="${directoLab}">${dir[0]}</td><td style="${directoVal}" colspan="3">${dir[1]}</td></tr>`);
-      for (let k = 0; k < d.length; k += 2) {
-        const [a, b] = [d[k], d[k + 1]];
-        rows.push(`<tr><td style="${directoLab}">${a[0]}</td><td style="${directoVal}"${b ? "" : ' colspan="3"'}>${a[1]}</td>${b ? `<td style="${directoLab}">${b[0]}</td><td style="${directoVal}">${b[1]}</td>` : ""}</tr>`);
-      }
-      return rows.join("\n        ");
-    })();
+    const directoRows = oficinaDirecto
+      ? datosOficina(oficinaDirecto)
+          .map(([k, v]) => `<tr><td style="${directoLab}">${escapeHtml(k)}</td><td style="${directoVal}">${escapeHtml(v)}</td></tr>`)
+          .join("\n        ")
+      : "";
     const directoBlock = oficinaDirecto
       ? `
   <table cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:100%;">

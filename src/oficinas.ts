@@ -39,14 +39,14 @@ export const OFICINAS: Oficina[] = [
 ];
 
 /** Datos de la oficina como pares [rótulo, valor], sin los vacíos.
- *  Orden pensado para la ficha: Dirección (fila completa), luego pares de 2 columnas. */
+ *  Orden de la ficha (una columna, hacia abajo). */
 export const datosOficina = (o: Oficina): [string, string][] =>
   ([
     ["Dirección", o.direccion],
     [o.idTipo || "RUC", o.idNumero],
     ["Contacto", o.contacto],
-    ["Teléfono", o.telefono],
     ["Correo", o.correo],
+    ["Teléfono", o.telefono],
   ] as [string, string | undefined][])
     .filter(([, v]) => String(v ?? "").trim() !== "")
     .map(([k, v]) => [k, String(v).trim()]);
