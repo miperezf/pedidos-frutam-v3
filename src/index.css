@@ -134,7 +134,7 @@
   }
   /* Celda editable de la tabla */
   .cell-input {
-    @apply w-full rounded-md border border-transparent bg-transparent px-2 py-0.5 text-sm text-fg placeholder:text-subtle;
+    @apply w-full rounded-md border border-transparent bg-transparent px-2 py-0.5 text-center text-sm text-fg placeholder:text-subtle;
   }
   .cell-input:hover:not([readonly]) {
     @apply border-line;

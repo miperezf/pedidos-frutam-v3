@@ -64,7 +64,9 @@ const db = getFirestore(app);
 //  v52.4 fila cancelada roja y tachada también en campos vacíos (como la original),
 //        sin subtítulo, se elimina "Nuevo mail" (duplicaba a "Limpiar búsqueda"),
 //        "Limpiar búsqueda" pide confirmación si va a descartar un borrador con datos
-const APP_VERSION = "v52.4";
+//  v52.5 menú de perfil (círculo con estado de conexión) que agrupa historial,
+//        novedades, tema, cliente de correo, conexión y recarga; columnas centradas
+const APP_VERSION = "v52.5";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -300,6 +302,13 @@ const App = () => {
   const [addingOrder, setAddingOrder] = useState(false);
   const addingOrderRef = useRef(false);
   const [showRowHelp, setShowRowHelp] = useState(false); // v52.2: ayuda de acciones de fila
+  // v52.5: Esc cierra el menú de perfil (showConfigPanel = menú abierto)
+  useEffect(() => {
+    if (!showConfigPanel) return;
+    const onKey = (e) => { if (e.key === "Escape") setShowConfigPanel(false); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [showConfigPanel]);
 
   // v52.1: diagnóstico de conexión (se muestra en pantalla y en Configuración)
   const [authError, setAuthError] = useState(null); // { code, message }
@@ -2998,6 +3007,158 @@ const App = () => {
     />
   );
 
+  // ── v52.5: menú de perfil ──────────────────────────────────────────────
+  const connectionOk = !!userId && !authError && saveState !== "error";
+  const userShort = userId ? userId.substring(0, 8).toUpperCase() : "—";
+  const closeMenu = () => setShowConfigPanel(false);
+  const menuItem = ({ icon, label, hint, right, onClick, disabled = false }) => (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      disabled={disabled}
+      className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-fg-2 transition-colors hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      <Icon name={icon} className="h-[18px] w-[18px] shrink-0 text-muted" />
+      <span className="min-w-0 flex-1">
+        <span className="block font-medium text-fg">{label}</span>
+        {hint && <span className="block truncate text-xs text-muted">{hint}</span>}
+      </span>
+      {right}
+    </button>
+  );
+  const segment = (options, value, onPick, ariaLabel) => (
+    <div role="group" aria-label={ariaLabel} className="grid gap-1 rounded-lg bg-surface-3 p-1" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
+      {options.map((o) => {
+        const active = o.value === value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            aria-pressed={active}
+            aria-label={o.aria || o.label}
+            title={o.title || o.label}
+            onClick={() => onPick(o.value)}
+            className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-semibold transition-colors ${
+              active ? "bg-surface text-primary shadow-xs" : "text-muted hover:text-fg"
+            }`}
+          >
+            {o.icon && <Icon name={o.icon} className="h-3.5 w-3.5" />}
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+  const EMAIL_CLIENT_OPTIONS = [
+    { value: "auto", label: "Automático", title: "Intenta Outlook Desktop y, si no está instalado, abre Outlook Web", desc: "Intenta Outlook Desktop; si no está, abre Outlook Web." },
+    { value: "desktop", label: "Desktop", title: "Siempre la aplicación de Outlook", desc: "Siempre abre la aplicación de Outlook instalada." },
+    { value: "web", label: "Web", title: "Siempre outlook.office.com", desc: "Siempre abre outlook.office.com en el navegador." },
+  ];
+
+  const profileMenu = (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setShowConfigPanel((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={showConfigPanel}
+        aria-label="Mi perfil y ajustes"
+        title="Mi perfil y ajustes"
+        className="relative flex h-9 w-9 items-center justify-center rounded-full bg-primary-soft text-primary ring-1 ring-primary-line transition hover:ring-2 hover:ring-primary"
+      >
+        <Icon name="user" className="h-5 w-5" />
+        <span
+          className={`absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-2 border-surface ${connectionOk ? "bg-success" : "bg-danger"}`}
+          title={connectionOk ? "Conectado" : "Sin conexión"}
+        />
+      </button>
+
+      {showConfigPanel && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={closeMenu} aria-hidden="true" />
+          <div role="menu" aria-label="Perfil y ajustes" className="absolute top-11 right-0 z-50 w-80 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl">
+            {/* Perfil + estado */}
+            <div className="flex items-center gap-3 border-b border-line bg-surface-2 px-4 py-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-primary-fg">
+                <Icon name="user" className="h-5 w-5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold text-fg" title={userId || undefined}>Usuario {userShort}</p>
+                <p className={`flex items-center gap-1.5 text-xs ${connectionOk ? "text-success" : "text-danger"}`}>
+                  <span className="h-2 w-2 shrink-0 rounded-full bg-current" />
+                  <span className="shrink-0 whitespace-nowrap">{connectionOk ? "Conectado" : "Sin conexión"}</span>
+                  <span className="min-w-0 truncate font-mono text-muted">· {firebaseConfig.projectId || "sin configurar"}</span>
+                </p>
+              </div>
+            </div>
+            {(authError || connError) && (
+              <div className="border-b border-line bg-danger-soft px-4 py-2.5 text-xs">
+                <p className="font-mono break-all text-danger">{(authError || connError).code}</p>
+                <p className="mt-1 text-fg-2">{diagnoseError(authError || connError)}</p>
+              </div>
+            )}
+
+            {/* Accesos */}
+            <div className="py-1">
+              {menuItem({
+                icon: "clock",
+                label: "Historial de envíos",
+                hint: sentHistory.length ? "Ver o re-enviar tus últimos correos" : "Aún no tienes envíos",
+                right: sentHistory.length ? <Badge tone="primary">{sentHistory.length}</Badge> : null,
+                onClick: () => { closeMenu(); setShowHistoryPanel(true); },
+                disabled: sentHistory.length === 0,
+              })}
+              {menuItem({
+                icon: "sparkles",
+                label: "Novedades de la versión",
+                hint: `${APP_VERSION} · ${APP_VERSION_DATE}`,
+                onClick: () => { closeMenu(); setShowWhatsNew(true); },
+              })}
+            </div>
+
+            {/* Preferencias */}
+            <div className="space-y-3 border-t border-line px-4 py-3">
+              <div>
+                <p className="mb-1.5 text-xs font-medium text-muted">Tema</p>
+                {segment(
+                  [
+                    { value: "light", label: "Claro", aria: "Modo claro", icon: "sun" },
+                    { value: "dark", label: "Oscuro", aria: "Modo oscuro", icon: "moon" },
+                  ],
+                  darkMode ? "dark" : "light",
+                  (v) => { if ((v === "dark") !== darkMode) toggleDarkMode(); },
+                  "Tema"
+                )}
+              </div>
+              <div>
+                <p className="mb-1.5 text-xs font-medium text-muted">Abrir el correo con Outlook</p>
+                {segment(EMAIL_CLIENT_OPTIONS, emailClientPref, saveEmailClientPref, "Cliente de correo")}
+                <p className="mt-1.5 text-[11px] leading-snug text-muted">
+                  {(EMAIL_CLIENT_OPTIONS.find((o) => o.value === emailClientPref) || EMAIL_CLIENT_OPTIONS[0]).desc}
+                </p>
+              </div>
+            </div>
+
+            {/* Sesión */}
+            <div className="border-t border-line py-1">
+              {menuItem({
+                icon: "refresh",
+                label: "Recargar aplicación",
+                hint: "Descarta los borradores sin enviar",
+                onClick: () => { closeMenu(); confirmReloadSession(); },
+              })}
+            </div>
+            <div className="flex justify-between border-t border-line bg-surface-2 px-4 py-2 text-[11px] text-subtle">
+              <span>{APP_VERSION} · {APP_VERSION_DATE}</span>
+              <span>Preferencias de este dispositivo</span>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+
   const envBanner = ENV_LABEL ? (
     <div role="status" className="border-b border-warning-line bg-warning-soft px-3 py-1.5 text-center text-xs font-semibold text-warning">
       Entorno de {ENV_LABEL.toLowerCase()} · base de datos: <span className="font-mono">{firebaseConfig.projectId || "sin configurar"}</span> · no usar para pedidos reales
@@ -3117,15 +3278,7 @@ const App = () => {
           <div className="min-w-0 flex-1 border-l border-line pl-3">
             <h1 className="truncate text-sm font-semibold text-fg sm:text-base">Pedidos Comercial Frutam</h1>
           </div>
-          <nav className="flex items-center gap-1" aria-label="Acciones generales">
-            {sentHistory.length > 0 && (
-              <Button size="sm" variant="ghost" icon="clock" onClick={() => setShowHistoryPanel(true)} aria-label="Historial de envíos" title="Historial de envíos">
-                <span className="hidden md:inline">Historial</span>
-                <span className="rounded-full bg-primary px-1.5 text-[10px] leading-4 font-bold text-primary-fg">{sentHistory.length}</span>
-              </Button>
-            )}
-            <IconButton label="Configuración" icon="cog" onClick={() => setShowConfigPanel(true)} badge={authError || connError ? "!" : null} />
-          </nav>
+          {profileMenu}
         </div>
       </header>
 
@@ -3417,7 +3570,7 @@ const App = () => {
                 <div className="overflow-x-auto rounded-lg border border-line-strong">
                 <table className="w-full min-w-[860px] text-sm">
                   <thead>
-                    <tr className="bg-thead text-left text-[11px] font-semibold tracking-wide text-thead-fg uppercase">
+                    <tr className="bg-thead text-center text-[11px] font-semibold tracking-wide text-thead-fg uppercase">
                       <th scope="col" className="w-8 py-2 pl-3"><span className="sr-only">Mover</span></th>
                       {ITEM_FIELDS.map((f) => (
                         <th key={f.name} scope="col" className={`px-2 py-2 whitespace-nowrap ${f.width || ""}`}>{f.label}</th>
@@ -3718,101 +3871,6 @@ const App = () => {
             })}
           </ul>
         )}
-      </Modal>
-
-      {/* ── PANEL: CONFIGURACIÓN ───────────────────────────────────────────── */}
-      <Modal
-        open={showConfigPanel}
-        onClose={() => setShowConfigPanel(false)}
-        title="Configuración"
-        icon="cog"
-        drawer
-        footer={<p className="w-full text-center text-xs text-muted">Preferencias guardadas en este dispositivo · {APP_VERSION}</p>}
-      >
-        <div className="space-y-6">
-          <section>
-            <h3 className="text-sm font-semibold text-fg">Apariencia</h3>
-            <p className="mb-3 text-xs text-muted">Tema de la interfaz</p>
-            <div className="grid grid-cols-2 gap-2" role="group" aria-label="Tema">
-              {[
-                { dark: false, label: "Modo claro", icon: "sun" },
-                { dark: true, label: "Modo oscuro", icon: "moon" },
-              ].map((opt) => {
-                const active = darkMode === opt.dark;
-                return (
-                  <button
-                    key={opt.label}
-                    type="button"
-                    aria-pressed={active}
-                    onClick={() => { if (!active) toggleDarkMode(); }}
-                    className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors ${
-                      active ? "border-primary bg-primary-soft text-primary" : "border-line-strong text-fg-2 hover:bg-surface-2"
-                    }`}
-                  >
-                    <Icon name={opt.icon} className="h-4 w-4" />
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-
-          <section className="border-t border-line pt-5">
-            <h3 className="text-sm font-semibold text-fg">Cliente de correo</h3>
-            <p className="mb-3 text-xs text-muted">Qué se abre al pulsar “Enviar email”</p>
-            <div className="space-y-2" role="radiogroup" aria-label="Cliente de correo">
-              {[
-                { value: "auto", label: "Detección automática", desc: "Intenta Outlook Desktop y, si no está instalado, abre Outlook Web." },
-                { value: "desktop", label: "Outlook Desktop", desc: "Siempre abre la aplicación de Outlook instalada." },
-                { value: "web", label: "Outlook Web", desc: "Siempre abre outlook.office.com en el navegador." },
-              ].map((opt) => {
-                const active = emailClientPref === opt.value;
-                return (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={active}
-                    onClick={() => saveEmailClientPref(opt.value)}
-                    className={`w-full rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                      active ? "border-primary bg-primary-soft" : "border-line-strong hover:bg-surface-2"
-                    }`}
-                  >
-                    <span className="flex items-center justify-between gap-2">
-                      <span className={`text-sm font-semibold ${active ? "text-primary" : "text-fg"}`}>{opt.label}</span>
-                      {active && <Icon name="check" className="h-4 w-4 text-primary" />}
-                    </span>
-                    <span className="mt-0.5 block text-xs text-muted">{opt.desc}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-
-          <section className="border-t border-line pt-5">
-            <h3 className="text-sm font-semibold text-fg">Estado de conexión</h3>
-            <dl className="mt-2 space-y-1.5 text-xs">
-              <div className="flex justify-between gap-3"><dt className="text-muted">Proyecto</dt><dd className="font-mono text-fg">{firebaseConfig.projectId || "sin configurar"}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">Sesión</dt><dd className={userId ? "text-success" : "text-danger"}>{userId ? "Activa (anónima)" : `Sin sesión${authError ? ` · ${authError.code}` : ""}`}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">Último guardado</dt><dd className={saveState === "error" ? "text-danger" : "text-fg"}>{{ idle: "—", saving: "Guardando…", saved: "Correcto", error: "Con error" }[saveState]}</dd></div>
-              {connError && (
-                <div className="rounded-md bg-danger-soft p-2 text-danger">
-                  <p className="font-mono break-all">{connError.op} · {connError.code}</p>
-                  <p className="mt-1 text-fg-2">{diagnoseError(connError)}</p>
-                </div>
-              )}
-            </dl>
-          </section>
-
-          <section className="border-t border-line pt-5">
-            <h3 className="text-sm font-semibold text-fg">Sesión</h3>
-            <p className="mt-1 mb-3 flex items-center gap-1.5 text-xs text-muted" title={userId ? `ID: ${userId}` : undefined}>
-              <Icon name="user" className="h-4 w-4" />
-              Identificador: <span className="font-mono">{userId ? userId.substring(0, 8).toUpperCase() : "—"}</span>
-            </p>
-            <Button size="sm" variant="secondary" icon="refresh" onClick={confirmReloadSession}>Recargar aplicación</Button>
-          </section>
-        </div>
       </Modal>
 
       {/* ── MODAL: NOVEDADES (una vez por versión) ─────────────────────────── */}
