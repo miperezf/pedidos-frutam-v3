@@ -69,7 +69,9 @@ const db = getFirestore(app);
 //  v52.6 el menú de perfil se abre en el espacio libre a la derecha (borde de pantalla)
 //  v52.7 el menú sale del círculo de perfil hacia la derecha (sin tapar campos);
 //        historial como reloj circular con la cantidad de envíos
-const APP_VERSION = "v52.7";
+//  v52.8 perfil y ajustes en panel lateral (como el historial); reloj solo con envíos;
+//        íconos de la barra más pequeños
+const APP_VERSION = "v52.8";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -305,34 +307,7 @@ const App = () => {
   const [addingOrder, setAddingOrder] = useState(false);
   const addingOrderRef = useRef(false);
   const [showRowHelp, setShowRowHelp] = useState(false); // v52.2: ayuda de acciones de fila
-  // v52.5: Esc cierra el menú de perfil (showConfigPanel = menú abierto)
-  // v52.6: el menú se ancla al borde derecho de la ventana (espacio libre) y su
-  // altura sigue al círculo de perfil al hacer scroll o cambiar el tamaño.
-  // v52.7: el menú sale del círculo y se despliega hacia la derecha, empezando
-  // donde termina el contenido (no tapa campos). Si no cabe, se corre lo mínimo
-  // necesario para no salir de la pantalla.
-  const avatarRef = useRef(null);
-  const MENU_WIDTH = 320;
-  const [menuLeft, setMenuLeft] = useState(0);
-  useEffect(() => {
-    if (!showConfigPanel) return;
-    const place = () => {
-      const r = avatarRef.current?.getBoundingClientRect();
-      if (!r) return;
-      const width = Math.min(MENU_WIDTH, window.innerWidth - 24);
-      const preferred = r.width + 8; // justo a la derecha del círculo
-      const maxLeft = window.innerWidth - 12 - width - r.left; // borde derecho de la ventana
-      setMenuLeft(Math.round(Math.min(preferred, maxLeft)));
-    };
-    place();
-    const onKey = (e) => { if (e.key === "Escape") setShowConfigPanel(false); };
-    document.addEventListener("keydown", onKey);
-    window.addEventListener("resize", place);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      window.removeEventListener("resize", place);
-    };
-  }, [showConfigPanel]);
+  // v52.8: perfil y ajustes en panel lateral (Modal drawer: Esc y foco incluidos)
 
   // v52.1: diagnóstico de conexión (se muestra en pantalla y en Configuración)
   const [authError, setAuthError] = useState(null); // { code, message }
@@ -3038,10 +3013,9 @@ const App = () => {
   const menuItem = ({ icon, label, hint, right, onClick, disabled = false }) => (
     <button
       type="button"
-      role="menuitem"
       onClick={onClick}
       disabled={disabled}
-      className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-fg-2 transition-colors hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+      className="-mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-lg px-2 py-2.5 text-left text-sm text-fg-2 transition-colors hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
     >
       <Icon name={icon} className="h-[18px] w-[18px] shrink-0 text-muted" />
       <span className="min-w-0 flex-1">
@@ -3080,105 +3054,96 @@ const App = () => {
     { value: "web", label: "Web", title: "Siempre outlook.office.com", desc: "Siempre abre outlook.office.com en el navegador." },
   ];
 
-  const profileMenu = (
-    <div className="relative">
-      <button
-        ref={avatarRef}
-        type="button"
-        onClick={() => setShowConfigPanel((v) => !v)}
-        aria-haspopup="menu"
-        aria-expanded={showConfigPanel}
-        aria-label="Mi perfil y ajustes"
-        title="Mi perfil y ajustes"
-        className="relative flex h-9 w-9 items-center justify-center rounded-full bg-primary-soft text-primary ring-1 ring-primary-line transition hover:ring-2 hover:ring-primary"
-      >
-        <Icon name="user" className="h-5 w-5" />
-        <span
-          className={`absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-2 border-surface ${connectionOk ? "bg-success" : "bg-danger"}`}
-          title={connectionOk ? "Conectado" : "Sin conexión"}
-        />
-      </button>
+  const profileButton = (
+    <button
+      type="button"
+      onClick={() => setShowConfigPanel(true)}
+      aria-haspopup="dialog"
+      aria-label="Mi perfil y ajustes"
+      title="Mi perfil y ajustes"
+      className="relative flex h-8 w-8 items-center justify-center rounded-full bg-primary-soft text-primary ring-1 ring-primary-line transition hover:ring-2 hover:ring-primary"
+    >
+      <Icon name="user" className="h-[18px] w-[18px]" />
+      <span
+        className={`absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full border-2 border-surface ${connectionOk ? "bg-success" : "bg-danger"}`}
+        title={connectionOk ? "Conectado" : "Sin conexión"}
+      />
+    </button>
+  );
 
-      {showConfigPanel && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={closeMenu} aria-hidden="true" />
-          <div
-            role="menu"
-            aria-label="Perfil y ajustes"
-            style={{ left: menuLeft }}
-            className="absolute top-11 z-50 max-h-[calc(100vh-5rem)] w-80 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-2xl border border-line bg-surface shadow-2xl"
-          >
-            {/* Perfil + estado */}
-            <div className="flex items-center gap-3 border-b border-line bg-surface-2 px-4 py-3">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-primary-fg">
-                <Icon name="user" className="h-5 w-5" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-fg" title={userId || undefined}>Usuario {userShort}</p>
-                <p className={`flex items-center gap-1.5 text-xs ${connectionOk ? "text-success" : "text-danger"}`}>
-                  <span className="h-2 w-2 shrink-0 rounded-full bg-current" />
-                  <span className="shrink-0 whitespace-nowrap">{connectionOk ? "Conectado" : "Sin conexión"}</span>
-                  <span className="min-w-0 truncate font-mono text-muted">· {firebaseConfig.projectId || "sin configurar"}</span>
-                </p>
-              </div>
-            </div>
-            {(authError || connError) && (
-              <div className="border-b border-line bg-danger-soft px-4 py-2.5 text-xs">
-                <p className="font-mono break-all text-danger">{(authError || connError).code}</p>
-                <p className="mt-1 text-fg-2">{diagnoseError(authError || connError)}</p>
-              </div>
-            )}
-
-            {/* Accesos */}
-            <div className="py-1">
-              {menuItem({
-                icon: "sparkles",
-                label: "Novedades de la versión",
-                hint: `${APP_VERSION} · ${APP_VERSION_DATE}`,
-                onClick: () => { closeMenu(); setShowWhatsNew(true); },
-              })}
-            </div>
-
-            {/* Preferencias */}
-            <div className="space-y-3 border-t border-line px-4 py-3">
-              <div>
-                <p className="mb-1.5 text-xs font-medium text-muted">Tema</p>
-                {segment(
-                  [
-                    { value: "light", label: "Claro", aria: "Modo claro", icon: "sun" },
-                    { value: "dark", label: "Oscuro", aria: "Modo oscuro", icon: "moon" },
-                  ],
-                  darkMode ? "dark" : "light",
-                  (v) => { if ((v === "dark") !== darkMode) toggleDarkMode(); },
-                  "Tema"
-                )}
-              </div>
-              <div>
-                <p className="mb-1.5 text-xs font-medium text-muted">Abrir el correo con Outlook</p>
-                {segment(EMAIL_CLIENT_OPTIONS, emailClientPref, saveEmailClientPref, "Cliente de correo")}
-                <p className="mt-1.5 text-[11px] leading-snug text-muted">
-                  {(EMAIL_CLIENT_OPTIONS.find((o) => o.value === emailClientPref) || EMAIL_CLIENT_OPTIONS[0]).desc}
-                </p>
-              </div>
-            </div>
-
-            {/* Sesión */}
-            <div className="border-t border-line py-1">
-              {menuItem({
-                icon: "refresh",
-                label: "Recargar aplicación",
-                hint: "Descarta los borradores sin enviar",
-                onClick: () => { closeMenu(); confirmReloadSession(); },
-              })}
-            </div>
-            <div className="flex justify-between border-t border-line bg-surface-2 px-4 py-2 text-[11px] text-subtle">
-              <span>{APP_VERSION} · {APP_VERSION_DATE}</span>
-              <span>Preferencias de este dispositivo</span>
-            </div>
+  const profilePanel = (
+    <Modal
+      open={showConfigPanel}
+      onClose={closeMenu}
+      title="Mi perfil y ajustes"
+      icon="user"
+      drawer
+      footer={<p className="w-full text-center text-xs text-muted">{APP_VERSION} · {APP_VERSION_DATE} · preferencias de este dispositivo</p>}
+    >
+      <div className="space-y-5">
+        {/* Perfil + estado de conexión */}
+        <div className="flex items-center gap-3 rounded-xl border border-line bg-surface-2 p-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-primary-fg">
+            <Icon name="user" className="h-5 w-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-semibold text-fg" title={userId || undefined}>Usuario {userShort}</p>
+            <p className={`flex items-center gap-1.5 text-xs ${connectionOk ? "text-success" : "text-danger"}`}>
+              <span className="h-2 w-2 shrink-0 rounded-full bg-current" />
+              <span className="shrink-0 whitespace-nowrap">{connectionOk ? "Conectado" : "Sin conexión"}</span>
+              <span className="min-w-0 truncate font-mono text-muted">· {firebaseConfig.projectId || "sin configurar"}</span>
+            </p>
           </div>
-        </>
-      )}
-    </div>
+        </div>
+        {(authError || connError) && (
+          <div className="rounded-xl border border-danger/30 bg-danger-soft p-3 text-xs">
+            <p className="font-mono break-all text-danger">{(authError || connError).code}</p>
+            <p className="mt-1 text-fg-2">{diagnoseError(authError || connError)}</p>
+          </div>
+        )}
+
+        {/* Preferencias */}
+        <section className="space-y-3">
+          <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">Preferencias</h3>
+          <div>
+            <p className="mb-1.5 text-sm font-medium text-fg">Tema</p>
+            {segment(
+              [
+                { value: "light", label: "Claro", aria: "Modo claro", icon: "sun" },
+                { value: "dark", label: "Oscuro", aria: "Modo oscuro", icon: "moon" },
+              ],
+              darkMode ? "dark" : "light",
+              (v) => { if ((v === "dark") !== darkMode) toggleDarkMode(); },
+              "Tema"
+            )}
+          </div>
+          <div>
+            <p className="mb-1.5 text-sm font-medium text-fg">Abrir el correo con Outlook</p>
+            {segment(EMAIL_CLIENT_OPTIONS, emailClientPref, saveEmailClientPref, "Cliente de correo")}
+            <p className="mt-1.5 text-xs leading-snug text-muted">
+              {(EMAIL_CLIENT_OPTIONS.find((o) => o.value === emailClientPref) || EMAIL_CLIENT_OPTIONS[0]).desc}
+            </p>
+          </div>
+        </section>
+
+        {/* Aplicación */}
+        <section className="space-y-1 border-t border-line pt-4">
+          <h3 className="mb-2 text-xs font-semibold tracking-wide text-muted uppercase">Aplicación</h3>
+          {menuItem({
+            icon: "sparkles",
+            label: "Novedades de la versión",
+            hint: `${APP_VERSION} · ${APP_VERSION_DATE}`,
+            onClick: () => { closeMenu(); setShowWhatsNew(true); },
+          })}
+          {menuItem({
+            icon: "refresh",
+            label: "Recargar aplicación",
+            hint: "Descarta los borradores sin enviar",
+            onClick: () => { closeMenu(); confirmReloadSession(); },
+          })}
+        </section>
+      </div>
+    </Modal>
   );
 
   const envBanner = ENV_LABEL ? (
@@ -3302,21 +3267,21 @@ const App = () => {
           </div>
           <div className="flex items-center gap-2">
             {/* v52.7: historial como reloj circular con la cantidad de envíos */}
-            <button
-              type="button"
-              onClick={() => setShowHistoryPanel(true)}
-              aria-label={`Historial de envíos (${sentHistory.length})`}
-              title={sentHistory.length ? `Historial: ${sentHistory.length} envío${sentHistory.length > 1 ? "s" : ""}` : "Historial de envíos (vacío)"}
-              className="relative flex h-9 w-9 items-center justify-center rounded-full bg-surface-3 text-fg-2 ring-1 ring-line transition hover:text-primary hover:ring-2 hover:ring-primary"
-            >
-              <Icon name="clock" className="h-5 w-5" />
-              {sentHistory.length > 0 && (
-                <span className="absolute -top-1 -right-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-surface bg-primary px-1 text-[10px] font-bold text-primary-fg">
+            {sentHistory.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowHistoryPanel(true)}
+                aria-label={`Historial de envíos (${sentHistory.length})`}
+                title={`Historial: ${sentHistory.length} envío${sentHistory.length > 1 ? "s" : ""}`}
+                className="relative flex h-8 w-8 items-center justify-center rounded-full bg-surface-3 text-fg-2 ring-1 ring-line transition hover:text-primary hover:ring-2 hover:ring-primary"
+              >
+                <Icon name="clock" className="h-[18px] w-[18px]" />
+                <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full border-2 border-surface bg-primary px-0.5 text-[9px] font-bold text-primary-fg">
                   {sentHistory.length}
                 </span>
-              )}
-            </button>
-            {profileMenu}
+              </button>
+            )}
+            {profileButton}
           </div>
         </div>
       </header>
@@ -3911,6 +3876,9 @@ const App = () => {
           </ul>
         )}
       </Modal>
+
+      {/* ── PANEL: PERFIL Y AJUSTES ────────────────────────────────────────── */}
+      {profilePanel}
 
       {/* ── MODAL: NOVEDADES (una vez por versión) ─────────────────────────── */}
       <Modal
