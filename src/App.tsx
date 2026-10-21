@@ -61,7 +61,10 @@ const db = getFirestore(app);
 //        tabla, tabla con margen dentro de la tarjeta, sin textos de relleno
 //  v52.3 tabla compacta (filas más bajas, huincha de total delgada), "+" verde para
 //        duplicar, sin botón "Agregar fila", cabecera Acciones centrada
-const APP_VERSION = "v52.3";
+//  v52.4 fila cancelada roja y tachada también en campos vacíos (como la original),
+//        sin subtítulo, se elimina "Nuevo mail" (duplicaba a "Limpiar búsqueda"),
+//        "Limpiar búsqueda" pide confirmación si va a descartar un borrador con datos
+const APP_VERSION = "v52.4";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -149,7 +152,7 @@ const TableInput = React.forwardRef(
         inputMode={inputMode}
         min={type === "number" ? 0 : undefined}
         className={`${variant === "field" ? "field py-1.5" : "cell-input"} ${
-          isCanceledProp ? "line-through text-danger" : ""
+          isCanceledProp ? "line-through text-danger placeholder:text-danger/60" : ""
         }`}
         ref={ref}
         readOnly={readOnly}
@@ -2119,34 +2122,6 @@ const App = () => {
     await loadMyDrafts({ silent: true });
   };
 
-  const handleNewMail = async () => {
-    if (!db || !userId) return;
-
-    // Reset refs BEFORE soft-delete so no stale proveedor leaks into new draft
-    headerInfoRef.current = { ...initialHeaderState };
-    orderItemsRef.current = [{ ...initialItemState, id: crypto.randomUUID() }];
-    activeOrderIdRef.current = null;
-
-    // Soft-delete all current drafts
-    const currentDrafts = displayedOrders.filter(o => o.header?.status === "draft");
-    await Promise.all(currentDrafts.map(o => handleSoftDeleteOrderInFirestore(o.id)));
-
-    // Reset all UI state
-    setDisplayedOrders([]);
-    setActiveOrderId(null);
-    setCurrentOrderIndex(0);
-    setHeaderInfo({ ...initialHeaderState });
-    setOrderItems([{ ...initialItemState, id: crypto.randomUUID() }]);
-    setProveedorSuggestion(null);
-    if (suggestionTimerRef.current) clearTimeout(suggestionTimerRef.current);
-    suggestionAppliedRef.current = "";
-    committedSearchTermRef.current = "";
-    setSearchTerm("");
-    setCommittedSearchTerm("");
-
-    // Load drafts — finds 0, creates fresh one with new mailId and empty proveedor
-    await loadMyDrafts({ silent: true });
-  };
 
   const isMobileDevice = () => {
     return window.innerWidth <= 767;
@@ -2952,14 +2927,29 @@ const App = () => {
     }
   };
 
-  const confirmNewMail = async () => {
-    const ok = await askConfirm({
-      title: "¿Iniciar un nuevo mail?",
-      message: "Los borradores actuales se descartarán y se creará un Mail ID nuevo. Los pedidos ya enviados no se modifican.",
-      confirmLabel: "Nuevo mail",
-      danger: true,
-    });
-    if (ok) handleNewMail();
+  // v52.4: "Limpiar búsqueda" sin búsqueda activa descarta el borrador (crea un Mail ID
+  // nuevo). Si hay datos escritos, se pide confirmación para no perderlos por error.
+  const confirmClearSearch = async () => {
+    const hasDraftData =
+      !committedSearchTerm &&
+      displayedOrders.some((o, i) => {
+        const h = i === currentOrderIndex ? headerInfo : o.header || {};
+        const items = i === currentOrderIndex ? orderItems : o.items || [];
+        return (
+          ["reDestinatarios", "deNombrePais", "nave", "fechaCarga", "exporta"].some((k) => String(h[k] || "").trim()) ||
+          items.some((it) => ["pallets", "especie", "variedad", "formato", "calibre", "categoria", "preciosFOB", "estado"].some((k) => String(it[k] || "").trim()))
+        );
+      });
+    if (hasDraftData) {
+      const ok = await askConfirm({
+        title: "¿Descartar el borrador actual?",
+        message: `No hay una búsqueda activa: “Limpiar búsqueda” descarta los ${displayedOrders.length} pedido(s) en borrador y crea un Mail ID nuevo. Los pedidos enviados no se modifican.`,
+        confirmLabel: "Descartar borrador",
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    handleClearSearch();
   };
 
   const confirmDeleteOrder = async () => {
@@ -3126,14 +3116,8 @@ const App = () => {
           {vpcLogo}
           <div className="min-w-0 flex-1 border-l border-line pl-3">
             <h1 className="truncate text-sm font-semibold text-fg sm:text-base">Pedidos Comercial Frutam</h1>
-            <p className="hidden truncate text-xs text-muted sm:block">Armado y envío de pedidos por Mail ID</p>
           </div>
           <nav className="flex items-center gap-1" aria-label="Acciones generales">
-            {!committedSearchTerm && (
-              <Button size="sm" variant="ghost" icon="newMail" onClick={confirmNewMail} title="Descarta los borradores y empieza un Mail ID nuevo">
-                Nuevo mail
-              </Button>
-            )}
             {sentHistory.length > 0 && (
               <Button size="sm" variant="ghost" icon="clock" onClick={() => setShowHistoryPanel(true)} aria-label="Historial de envíos" title="Historial de envíos">
                 <span className="hidden md:inline">Historial</span>
@@ -3177,7 +3161,7 @@ const App = () => {
               <Button type="submit" variant="primary" icon="search" loading={isSearching} className="flex-1 sm:flex-none">
                 Buscar
               </Button>
-              <Button variant="secondary" onClick={handleClearSearch} className="flex-1 sm:flex-none">
+              <Button variant="secondary" onClick={confirmClearSearch} className="flex-1 sm:flex-none">
                 Limpiar búsqueda
               </Button>
             </div>
