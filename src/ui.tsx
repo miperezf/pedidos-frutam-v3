@@ -99,6 +99,10 @@ export function IconButton({ label, icon, tone = "default", badge = null, size =
     default: "text-muted hover:text-fg hover:bg-surface-3",
     primary: "text-primary hover:bg-primary-soft",
     danger: "text-muted hover:text-danger hover:bg-danger-soft",
+    // v52.1: colores semánticos fijos para las acciones de fila
+    success: "text-success hover:bg-success-soft",
+    warning: "text-warning hover:bg-warning-soft",
+    dangerSolid: "text-danger hover:bg-danger-soft",
   };
   const box = size === "sm" ? "h-8 w-8" : "h-9 w-9";
   return (

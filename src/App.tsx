@@ -53,7 +53,10 @@ const db = getFirestore(app);
 //  v52.0 nueva interfaz (tokens claro/oscuro, pestañas, barra de acciones),
 //        avisos de guardado/error, anti doble clic, confirmaciones propias,
 //        flechas respetan el cursor, reordenar en móvil, Mail ID validado
-const APP_VERSION = "v52.0";
+//  v52.1 navegador de pedidos (hasta 15+), cabecera de tabla contrastada, íconos
+//        con color y leyenda, FOB/FOT separado, sin "+" ambiguos, diagnóstico
+//        de conexión visible y tiempo máximo de 15 s por escritura
+const APP_VERSION = "v52.1";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -288,6 +291,20 @@ const App = () => {
   const searchingRef = useRef(false);
   const [addingOrder, setAddingOrder] = useState(false);
   const addingOrderRef = useRef(false);
+
+  // v52.1: diagnóstico de conexión (se muestra en pantalla y en Configuración)
+  const [authError, setAuthError] = useState(null); // { code, message }
+  const [connError, setConnError] = useState(null); // { code, message, at, op }
+  const recordError = (op, error) => {
+    const info = {
+      op,
+      code: error?.code || error?.name || "desconocido",
+      message: String(error?.message || error || ""),
+      at: Date.now(),
+    };
+    setConnError(info);
+    console.error(`[FRUTAM:${op}]`, info.code, info.message);
+  };
 
   const toggleDarkMode = () => {
     setDarkMode((prev) => {
@@ -577,11 +594,13 @@ const App = () => {
         }
       } catch (error) {
         // Auth failure — will still attach the listener below
+        setAuthError({ code: error?.code || "auth/desconocido", message: String(error?.message || error) });
       }
     };
 
     unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
+        setAuthError(null);
         setUserId(user.uid);
         setIsAuthReady(true);
       } else {
@@ -589,6 +608,7 @@ const App = () => {
           await signInAnonymously(auth);
           setUserId(auth.currentUser?.uid ?? null);
         } catch (anonError) {
+          setAuthError({ code: anonError?.code || "auth/desconocido", message: String(anonError?.message || anonError) });
           setUserId(null);
         } finally {
           setIsAuthReady(true);
@@ -804,9 +824,26 @@ const App = () => {
     if (orderToSave.rowAction && !orderToSave.id) return;
     setSaveState("saving");
     try {
-      await saveOrderToFirestoreRaw(orderToSave);
-      if (isMountedRef.current) setSaveState("saved");
+      // v52.1: si el servidor no confirma en 15 s, se informa (antes quedaba colgado)
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const e = new Error("El servidor no confirmó el guardado en 15 s.");
+          e.code = "timeout";
+          reject(e);
+        }, 15000);
+      });
+      try {
+        await Promise.race([saveOrderToFirestoreRaw(orderToSave), timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
+      if (isMountedRef.current) {
+        setSaveState("saved");
+        setConnError(null);
+      }
     } catch (error) {
+      recordError("GUARDAR", error);
       if (isMountedRef.current) setSaveState("error");
       if (Date.now() - lastSaveErrorToastRef.current > 8000) {
         lastSaveErrorToastRef.current = Date.now();
@@ -1235,6 +1272,7 @@ const App = () => {
         orderItemsRef.current = newItems;
         setCurrentOrderIndex(0);
       } catch (err) {
+        recordError("CARGA", err);
       } finally {
         if (isMountedRef.current) setIsLoading(false);
       }
@@ -1853,6 +1891,10 @@ const App = () => {
   };
 
   const handleAddOrder = async () => {
+    if (!userId) {
+      notify("error", "No hay conexión con la base de datos (sin sesión). Revisa el aviso rojo en la parte superior.");
+      return;
+    }
     if (addingOrderRef.current) return;
     addingOrderRef.current = true;
     setAddingOrder(true);
@@ -2865,6 +2907,32 @@ const App = () => {
   const formatPallets = (n) => Number(n || 0).toLocaleString("es-CL", { maximumFractionDigits: 2 });
   const emailClientLabel = { auto: "Outlook (detección automática)", desktop: "Outlook Desktop", web: "Outlook Web" }[emailClientPref] || "tu correo";
 
+  // v52.1: resumen de un pedido para el navegador (especies y pallets no cancelados)
+  const orderSummary = (items) => {
+    const list = Array.isArray(items) ? items : [];
+    const especies = [...new Set(list.map((it) => normalizeSpeciesName(it.especie)).filter(Boolean))];
+    const pallets = list.reduce((acc, it) => (it.isCanceled ? acc : acc + Math.max(0, parseFloat(it.pallets) || 0)), 0);
+    return { especies, pallets };
+  };
+
+  // v52.1: traduce el código de error de Firebase a una acción concreta
+  const diagnoseError = (err) => {
+    const code = String(err?.code || "");
+    const msg = String(err?.message || "");
+    if (!err) return "No hay sesión activa. Revisa que el inicio de sesión Anónimo esté habilitado en Firebase (Authentication → Método de acceso).";
+    if (/admin-restricted-operation|operation-not-allowed/.test(code))
+      return "El inicio de sesión Anónimo no está habilitado. En Firebase: Authentication → Método de acceso → Anónimo → Habilitar.";
+    if (/invalid-api-key|api-key-not-valid/.test(code + msg))
+      return "La configuración de Firebase no es válida. Revisa las variables VITE_FIREBASE_* del repositorio.";
+    if (/permission-denied/.test(code))
+      return `Las reglas de Firestore rechazaron la operación. Revisa que las reglas publicadas usen el ID de proyecto "${firebaseConfig.projectId}".`;
+    if (/not-found|failed-precondition/.test(code) && /database/i.test(msg))
+      return "No existe la base de datos de Firestore en este proyecto. En Firebase: Firestore Database → Crear base de datos.";
+    if (/unavailable|timeout|deadline-exceeded|network/.test(code))
+      return "El servidor no respondió. Revisa tu conexión a internet; si persiste, verifica que Firestore esté creado en el proyecto.";
+    return msg || "Error desconocido al comunicarse con Firebase.";
+  };
+
   const copyMailId = async () => {
     const id = headerInfo.mailId;
     if (!id) return;
@@ -2990,15 +3058,17 @@ const App = () => {
       <IconButton
         size="sm"
         icon="note"
-        tone={item.estado && item.estado !== "CANCELADO" ? "primary" : "default"}
+        tone="primary"
+        className={item.estado && item.estado !== "CANCELADO" ? "bg-primary-soft" : ""}
         label={item.estado && item.estado !== "CANCELADO" ? `Editar observación: ${item.estado}` : "Editar observación"}
         onClick={() => handleOpenObservationModal(item.id)}
         disabled={currentOrderIsDeleted}
       />
-      <IconButton size="sm" icon="duplicate" label="Duplicar fila" onClick={() => handleAddItem(item.id)} disabled={currentOrderIsDeleted} />
+      <IconButton size="sm" icon="duplicate" tone="success" label="Duplicar fila" onClick={() => handleAddItem(item.id)} disabled={currentOrderIsDeleted} />
       <IconButton
         size="sm"
         icon={item.isCanceled ? "undo" : "ban"}
+        tone="warning"
         label={item.isCanceled ? "Revertir cancelación" : "Cancelar fila"}
         onClick={() => toggleItemCancellation(item.id)}
         disabled={currentOrderIsDeleted}
@@ -3006,12 +3076,23 @@ const App = () => {
       <IconButton
         size="sm"
         icon="trash"
-        tone="danger"
+        tone="dangerSolid"
         label={orderItems.length <= 1 ? "No se puede eliminar la última fila" : "Eliminar fila"}
         onClick={() => handleDeleteItem(item.id)}
         disabled={orderItems.length <= 1 || currentOrderIsDeleted}
       />
     </>
+  );
+
+  // v52.1: leyenda de acciones de fila (mismos íconos y colores que los botones)
+  const legend = (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 text-xs text-muted sm:px-5">
+      <span className="font-medium">Acciones de fila:</span>
+      <span className="inline-flex items-center gap-1"><Icon name="note" className="h-4 w-4 text-primary" />Observación</span>
+      <span className="inline-flex items-center gap-1"><Icon name="duplicate" className="h-4 w-4 text-success" />Duplicar</span>
+      <span className="inline-flex items-center gap-1"><Icon name="ban" className="h-4 w-4 text-warning" />Cancelar / revertir</span>
+      <span className="inline-flex items-center gap-1"><Icon name="trash" className="h-4 w-4 text-danger" />Eliminar</span>
+    </div>
   );
 
   const tableInputProps = (item, field) => ({
@@ -3040,14 +3121,19 @@ const App = () => {
             <h1 className="truncate text-sm font-semibold text-fg sm:text-base">Pedidos Comercial Frutam</h1>
             <p className="hidden truncate text-xs text-muted sm:block">Armado y envío de pedidos por Mail ID</p>
           </div>
-          <nav className="flex items-center gap-0.5" aria-label="Acciones generales">
+          <nav className="flex items-center gap-1" aria-label="Acciones generales">
             {!committedSearchTerm && (
-              <IconButton label="Nuevo mail" icon="newMail" onClick={confirmNewMail} />
+              <Button size="sm" variant="ghost" icon="newMail" onClick={confirmNewMail} title="Descarta los borradores y empieza un Mail ID nuevo">
+                Nuevo mail
+              </Button>
             )}
             {sentHistory.length > 0 && (
-              <IconButton label="Historial de envíos" icon="clock" badge={sentHistory.length} onClick={() => setShowHistoryPanel(true)} />
+              <Button size="sm" variant="ghost" icon="clock" onClick={() => setShowHistoryPanel(true)} aria-label="Historial de envíos" title="Historial de envíos">
+                <span className="hidden md:inline">Historial</span>
+                <span className="rounded-full bg-primary px-1.5 text-[10px] leading-4 font-bold text-primary-fg">{sentHistory.length}</span>
+              </Button>
             )}
-            <IconButton label="Configuración" icon="cog" onClick={() => setShowConfigPanel(true)} />
+            <IconButton label="Configuración" icon="cog" onClick={() => setShowConfigPanel(true)} badge={authError || connError ? "!" : null} />
           </nav>
         </div>
       </header>
@@ -3109,6 +3195,22 @@ const App = () => {
           </div>
         </section>
 
+        {/* ── v52.1: DIAGNÓSTICO DE CONEXIÓN ───────────────────────────────── */}
+        {(authError || (connError && saveState === "error") || (!isLoading && isAuthReady && !userId)) && (
+          <div role="alert" className="rounded-xl border border-danger/40 bg-danger-soft px-4 py-3 text-sm">
+            <div className="flex items-start gap-3">
+              <Icon name="warning" className="mt-0.5 h-5 w-5 shrink-0 text-danger" />
+              <div className="min-w-0 space-y-1">
+                <p className="font-semibold text-danger">No se pudo {authError || !userId ? "iniciar sesión en" : "guardar en"} la base de datos</p>
+                <p className="text-fg-2">{diagnoseError(authError || connError)}</p>
+                <p className="font-mono text-xs break-all text-muted">
+                  Código: {(authError || connError)?.code || "sin sesión"} · Proyecto: {firebaseConfig.projectId || "sin configurar"}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ── AVISOS CONTEXTUALES ──────────────────────────────────────────── */}
         {otherUsersPresent.length > 0 && committedSearchTerm && (
           <div role="alert" className="flex items-start gap-3 rounded-xl border border-warning-line bg-warning-soft px-4 py-3 text-sm">
@@ -3149,51 +3251,99 @@ const App = () => {
           </section>
         ) : (
           <section className="rounded-2xl border border-line bg-surface shadow-xs">
-            {/* Pestañas de pedidos */}
-            <div className="flex items-center gap-2 border-b border-line px-2 sm:px-4">
-              <div className="-mb-px flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist" aria-label="Pedidos de este Mail ID">
+            {/* v52.1: navegador de pedidos — pensado para Mail ID con 15+ pedidos */}
+            <div className="space-y-3 border-b border-line bg-surface-2 px-3 py-3 sm:px-5 rounded-t-2xl">
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon="chevronLeft"
+                  onClick={() => goToOrder(currentOrderIndex - 1)}
+                  disabled={currentOrderIndex === 0}
+                  aria-label="Pedido anterior"
+                  title="Pedido anterior"
+                >
+                  <span className="hidden sm:inline">Anterior</span>
+                </Button>
+                <div className="min-w-0 flex-1 text-center" aria-live="polite">
+                  <p className="text-base leading-tight font-semibold text-fg sm:text-lg">
+                    {displayedOrders.length === 0 ? (
+                      <span className="text-muted">Sin pedidos cargados</span>
+                    ) : (
+                      <>
+                        Pedido <span className="text-primary">{currentOrderIndex + 1}</span>
+                        <span className="font-normal text-muted"> de {displayedOrders.length}</span>
+                      </>
+                    )}
+                    {currentOrderIsDeleted && <span className="ml-2 text-sm font-semibold text-danger">(Eliminado)</span>}
+                  </p>
+                  <p className="truncate text-xs text-muted">
+                    {(() => {
+                      const sum = orderSummary(orderItems);
+                      return `${sum.especies.join(", ") || "Sin especie"} · ${formatPallets(sum.pallets)} pallets · ${orderItems.length} ${orderItems.length === 1 ? "fila" : "filas"}`;
+                    })()}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => goToOrder(currentOrderIndex + 1)}
+                  disabled={currentOrderIndex >= displayedOrders.length - 1}
+                  aria-label="Pedido siguiente"
+                  title="Pedido siguiente"
+                >
+                  <span className="hidden sm:inline">Siguiente</span>
+                  <Icon name="chevronRight" className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5">
                 {displayedOrders.map((o, i) => {
                   const active = i === currentOrderIndex;
+                  const sum = orderSummary(active ? orderItems : o.items);
+                  const sent = o.header?.status === "sent";
                   return (
                     <button
                       key={o.id}
                       type="button"
-                      role="tab"
-                      aria-selected={active}
+                      data-order-chip
+                      aria-current={active ? "true" : undefined}
+                      aria-label={`Ir al pedido ${i + 1}`}
+                      title={`Pedido ${i + 1} · ${sum.especies.join(", ") || "sin especie"} · ${formatPallets(sum.pallets)} pallets${sent ? " · enviado" : ""}`}
                       onClick={() => goToOrder(i)}
-                      className={`flex shrink-0 items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium transition-colors ${
-                        active ? "border-primary text-primary" : "border-transparent text-muted hover:border-line-strong hover:text-fg"
+                      className={`relative h-8 min-w-8 rounded-lg border px-2 text-sm font-semibold tabular-nums transition-colors ${
+                        active
+                          ? "border-primary bg-primary text-primary-fg shadow-xs"
+                          : "border-line-strong bg-surface text-fg-2 hover:border-primary hover:text-primary"
                       }`}
                     >
-                      Pedido {i + 1}
-                      {o.header?.status === "sent" && <span className="h-1.5 w-1.5 rounded-full bg-success" title="Enviado" />}
+                      {i + 1}
+                      {sent && !active && <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full border-2 border-surface bg-success" />}
                     </button>
                   );
                 })}
-                <button
-                  type="button"
+                <Button
+                  size="sm"
+                  variant="primary"
+                  icon="plus"
                   onClick={handleAddOrder}
-                  disabled={currentOrderIsDeleted || addingOrder}
-                  className="flex shrink-0 items-center gap-1 rounded-md px-2.5 py-1.5 text-sm font-medium text-muted transition-colors hover:bg-surface-3 hover:text-primary disabled:opacity-40"
-                  title="Agregar un pedido a este Mail ID"
-                  aria-label="Nuevo pedido en este Mail ID"
+                  loading={addingOrder}
+                  disabled={currentOrderIsDeleted}
+                  className="ml-auto"
+                  title="Agrega otro pedido a este mismo Mail ID"
                 >
-                  <Icon name="plus" className="h-4 w-4" />
-                </button>
+                  Agregar pedido
+                </Button>
               </div>
-              <span className="hidden shrink-0 text-xs text-muted sm:block">
-                Pedido {currentOrderIndex + 1} de {displayedOrders.length}
-                {currentOrderIsDeleted && <span className="ml-2 font-semibold text-danger">(Eliminado)</span>}
-              </span>
             </div>
 
             {/* Encabezado del pedido */}
             <div className="grid grid-cols-1 gap-x-4 gap-y-3 p-4 sm:grid-cols-2 sm:p-5 lg:grid-cols-3">
               <div className="min-w-0">
-                {/* h-4 = alto de una etiqueta normal: el selector FOB/FOT no desalinea el campo */}
-                <div className="mb-1 flex h-4 items-center justify-between gap-2">
+                {/* v52.1: misma altura (h-6) que las demás etiquetas; el selector no toca el campo */}
+                <div className="mb-1.5 flex h-6 items-center justify-between gap-2">
                   <label htmlFor="reDestinatarios" className="label mb-0">Proveedor</label>
-                  <div role="group" aria-label="Incoterm" className={`inline-flex rounded-md border border-line-strong p-0.5 ${currentOrderIsDeleted ? "pointer-events-none opacity-50" : ""}`}>
+                  <div role="group" aria-label="Incoterm" className={`inline-flex overflow-hidden rounded-md border border-line-strong ${currentOrderIsDeleted ? "pointer-events-none opacity-50" : ""}`}>
                     {["FOB", "FOT"].map((term) => {
                       const active = headerInfo.incoterm === term;
                       return (
@@ -3204,7 +3354,7 @@ const App = () => {
                           onClick={() => { if (!currentOrderIsDeleted) handleIncotermChange(term); }}
                           disabled={currentOrderIsDeleted}
                           title={`Precios ${term} para todos los pedidos de este Mail ID`}
-                          className={`rounded px-2 py-0.5 text-[11px] font-semibold transition-colors ${active ? "bg-primary text-primary-fg" : "text-muted hover:text-fg"}`}
+                          className={`px-2.5 py-0.5 text-xs leading-4 font-semibold transition-colors ${active ? "bg-primary text-primary-fg" : "bg-surface text-muted hover:bg-surface-2 hover:text-fg"}`}
                         >
                           {term}
                         </button>
@@ -3257,7 +3407,7 @@ const App = () => {
               <div className="hidden overflow-x-auto md:block">
                 <table className="w-full min-w-[860px] text-sm">
                   <thead>
-                    <tr className="border-y border-line bg-surface-2 text-left text-[11px] font-semibold tracking-wide text-muted uppercase">
+                    <tr className="bg-thead text-left text-[11px] font-semibold tracking-wide text-thead-fg uppercase">
                       <th scope="col" className="w-8 py-2 pl-3"><span className="sr-only">Mover</span></th>
                       {ITEM_FIELDS.map((f) => (
                         <th key={f.name} scope="col" className={`px-2 py-2 whitespace-nowrap ${f.width || ""}`}>{f.label}</th>
@@ -3271,7 +3421,9 @@ const App = () => {
                         key={item.id}
                         onDragEnter={() => { dragOverIndex.current = index; }}
                         onDragOver={(e) => e.preventDefault()}
-                        className={`border-b border-line transition-colors ${item.isCanceled || currentOrderIsDeleted ? "bg-danger-soft/50" : "hover:bg-surface-2"}`}
+                        className={`border-b border-line transition-colors ${
+                          item.isCanceled || currentOrderIsDeleted ? "bg-danger-soft/60" : index % 2 === 1 ? "bg-surface-2 hover:bg-surface-3" : "bg-surface hover:bg-surface-3"
+                        }`}
                       >
                         <td className="py-1 pl-2">
                           <span
@@ -3309,7 +3461,7 @@ const App = () => {
                     ))}
                   </tbody>
                   <tfoot>
-                    <tr className="bg-surface-2" data-testid="total-pallets">
+                    <tr className="border-t-2 border-line-strong bg-surface-3" data-testid="total-pallets">
                       <td className="py-2.5 pl-3" />
                       <td className="px-3 py-2.5 font-semibold text-fg tabular-nums">{formatPallets(currentOrderTotalPallets)}</td>
                       <td colSpan={7} className="px-2 py-2.5 text-xs text-muted">
@@ -3318,10 +3470,12 @@ const App = () => {
                     </tr>
                   </tfoot>
                 </table>
+                {legend}
               </div>
 
               {/* Móvil: tarjetas */}
               <div className="space-y-3 px-3 pb-4 md:hidden">
+                {legend}
                 {orderItems.map((item, index) => (
                   <div key={item.id} className={`rounded-xl border border-line p-3 ${item.isCanceled || currentOrderIsDeleted ? "bg-danger-soft/50" : "bg-surface"}`}>
                     <div className="mb-2 flex items-center justify-between gap-2">
@@ -3372,9 +3526,6 @@ const App = () => {
             <span className="hidden sm:inline">Eliminar pedido</span>
           </Button>
           <div className="flex-1" />
-          <Button variant="secondary" icon="plus" onClick={handleAddOrder} loading={addingOrder} disabled={currentOrderIsDeleted} aria-label="Agregar pedido" title="Agregar un pedido a este Mail ID">
-            <span className="hidden sm:inline">Agregar pedido</span>
-          </Button>
           <Button variant="primary" icon="send" onClick={handleFinalizeOrder} disabled={currentOrderIsDeleted}>
             Finalizar pedido
           </Button>
@@ -3630,6 +3781,21 @@ const App = () => {
                 );
               })}
             </div>
+          </section>
+
+          <section className="border-t border-line pt-5">
+            <h3 className="text-sm font-semibold text-fg">Estado de conexión</h3>
+            <dl className="mt-2 space-y-1.5 text-xs">
+              <div className="flex justify-between gap-3"><dt className="text-muted">Proyecto</dt><dd className="font-mono text-fg">{firebaseConfig.projectId || "sin configurar"}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-muted">Sesión</dt><dd className={userId ? "text-success" : "text-danger"}>{userId ? "Activa (anónima)" : `Sin sesión${authError ? ` · ${authError.code}` : ""}`}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-muted">Último guardado</dt><dd className={saveState === "error" ? "text-danger" : "text-fg"}>{{ idle: "—", saving: "Guardando…", saved: "Correcto", error: "Con error" }[saveState]}</dd></div>
+              {connError && (
+                <div className="rounded-md bg-danger-soft p-2 text-danger">
+                  <p className="font-mono break-all">{connError.op} · {connError.code}</p>
+                  <p className="mt-1 text-fg-2">{diagnoseError(connError)}</p>
+                </div>
+              )}
+            </dl>
           </section>
 
           <section className="border-t border-line pt-5">
