@@ -80,7 +80,8 @@ const db = getFirestore(app);
 //        el mismo campo, sin cambios en Firestore), panel Consignee & Notify bajo
 //        los campos y bloque en el correo bajo Observaciones (oficinas en oficinas.ts)
 //  v53.3 bloque del correo compacto: sin país, oficina en el título, datos en 2 columnas
-const APP_VERSION = "v53.3";
+//  v53.4 bloque del correo centrado: columnas 50/50 con separadores finos
+const APP_VERSION = "v53.4";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -1800,9 +1801,10 @@ const App = () => {
     const formattedExporta    = escapeHtml(orderHeader.exporta  || "");
     // v53.2: compra directa → Exporta destacado y bloque CONSIGNEE & NOTIFY
     const oficinaDirecto = detectarDirecto(orderHeader.exporta);
-    // v53.3: bloque compacto — sin país, nombre en el título y datos en 2 columnas
+    // v53.4: bloque compacto y centrado — sin país, oficina en el título,
+    // datos en 2 columnas iguales separadas por una línea fina
     const directoTd =
-      "font-family:Arial,sans-serif;font-size:11px;line-height:1.35;color:#333333;mso-color-alt:#333333;text-align:left;vertical-align:top;";
+      "font-family:Arial,sans-serif;font-size:11px;line-height:1.4;color:#333333;mso-color-alt:#333333;text-align:center;vertical-align:middle;";
     const directoCols = oficinaDirecto
       ? (() => {
           const l = oficinaDirecto.lineas.map((x) => escapeHtml(x));
@@ -1813,12 +1815,12 @@ const App = () => {
     const directoBlock = oficinaDirecto
       ? `
   <table cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:100%;">
-    <tr><td style="border-left:3px solid #2563eb;background-color:#eef4ff;padding:5px 10px;">
+    <tr><td style="border-left:3px solid #2563eb;background-color:#eef4ff;padding:6px 10px;">
       <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;">
-        <tr><td colspan="2" style="${directoTd}padding-bottom:2px;"><b>CONSIGNEE &amp; NOTIFY:</b> <b style="color:#1d4ed8;">${escapeHtml(oficinaDirecto.nombre)}</b></td></tr>
+        <tr><td colspan="2" style="${directoTd}padding-bottom:4px;border-bottom:1px solid #c7d7fe;"><b>CONSIGNEE &amp; NOTIFY:</b> <b style="color:#1d4ed8;">${escapeHtml(oficinaDirecto.nombre)}</b></td></tr>
         <tr>
-          <td style="${directoTd}padding-right:16px;">${directoCols[0].join("<br>")}</td>
-          <td style="${directoTd}">${directoCols[1].join("<br>")}</td>
+          <td width="50%" style="${directoTd}width:50%;padding:4px 8px 0 0;border-right:1px solid #c7d7fe;">${directoCols[0].join("<br>")}</td>
+          <td width="50%" style="${directoTd}width:50%;padding:4px 0 0 8px;">${directoCols[1].join("<br>")}</td>
         </tr>
       </table>
     </td></tr>
