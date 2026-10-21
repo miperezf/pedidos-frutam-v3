@@ -67,7 +67,9 @@ const db = getFirestore(app);
 //  v52.5 menú de perfil (círculo con estado de conexión) que agrupa historial,
 //        novedades, tema, cliente de correo, conexión y recarga; columnas centradas
 //  v52.6 el menú de perfil se abre en el espacio libre a la derecha (borde de pantalla)
-const APP_VERSION = "v52.6";
+//  v52.7 el menú sale del círculo de perfil hacia la derecha (sin tapar campos);
+//        historial como reloj circular con la cantidad de envíos
+const APP_VERSION = "v52.7";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -306,23 +308,29 @@ const App = () => {
   // v52.5: Esc cierra el menú de perfil (showConfigPanel = menú abierto)
   // v52.6: el menú se ancla al borde derecho de la ventana (espacio libre) y su
   // altura sigue al círculo de perfil al hacer scroll o cambiar el tamaño.
+  // v52.7: el menú sale del círculo y se despliega hacia la derecha, empezando
+  // donde termina el contenido (no tapa campos). Si no cabe, se corre lo mínimo
+  // necesario para no salir de la pantalla.
   const avatarRef = useRef(null);
-  const [menuTop, setMenuTop] = useState(64);
+  const MENU_WIDTH = 320;
+  const [menuLeft, setMenuLeft] = useState(0);
   useEffect(() => {
     if (!showConfigPanel) return;
     const place = () => {
       const r = avatarRef.current?.getBoundingClientRect();
-      if (r) setMenuTop(Math.round(r.bottom + 8));
+      if (!r) return;
+      const width = Math.min(MENU_WIDTH, window.innerWidth - 24);
+      const preferred = r.width + 8; // justo a la derecha del círculo
+      const maxLeft = window.innerWidth - 12 - width - r.left; // borde derecho de la ventana
+      setMenuLeft(Math.round(Math.min(preferred, maxLeft)));
     };
     place();
     const onKey = (e) => { if (e.key === "Escape") setShowConfigPanel(false); };
     document.addEventListener("keydown", onKey);
     window.addEventListener("resize", place);
-    window.addEventListener("scroll", place, true);
     return () => {
       document.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", place);
-      window.removeEventListener("scroll", place, true);
     };
   }, [showConfigPanel]);
 
@@ -3097,8 +3105,8 @@ const App = () => {
           <div
             role="menu"
             aria-label="Perfil y ajustes"
-            style={{ top: menuTop }}
-            className="fixed right-3 z-50 max-h-[calc(100vh-5rem)] w-80 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-2xl border border-line bg-surface shadow-2xl sm:right-4"
+            style={{ left: menuLeft }}
+            className="absolute top-11 z-50 max-h-[calc(100vh-5rem)] w-80 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-2xl border border-line bg-surface shadow-2xl"
           >
             {/* Perfil + estado */}
             <div className="flex items-center gap-3 border-b border-line bg-surface-2 px-4 py-3">
@@ -3123,14 +3131,6 @@ const App = () => {
 
             {/* Accesos */}
             <div className="py-1">
-              {menuItem({
-                icon: "clock",
-                label: "Historial de envíos",
-                hint: sentHistory.length ? "Ver o re-enviar tus últimos correos" : "Aún no tienes envíos",
-                right: sentHistory.length ? <Badge tone="primary">{sentHistory.length}</Badge> : null,
-                onClick: () => { closeMenu(); setShowHistoryPanel(true); },
-                disabled: sentHistory.length === 0,
-              })}
               {menuItem({
                 icon: "sparkles",
                 label: "Novedades de la versión",
@@ -3300,7 +3300,24 @@ const App = () => {
           <div className="min-w-0 flex-1 border-l border-line pl-3">
             <h1 className="truncate text-sm font-semibold text-fg sm:text-base">Pedidos Comercial Frutam</h1>
           </div>
-          {profileMenu}
+          <div className="flex items-center gap-2">
+            {/* v52.7: historial como reloj circular con la cantidad de envíos */}
+            <button
+              type="button"
+              onClick={() => setShowHistoryPanel(true)}
+              aria-label={`Historial de envíos (${sentHistory.length})`}
+              title={sentHistory.length ? `Historial: ${sentHistory.length} envío${sentHistory.length > 1 ? "s" : ""}` : "Historial de envíos (vacío)"}
+              className="relative flex h-9 w-9 items-center justify-center rounded-full bg-surface-3 text-fg-2 ring-1 ring-line transition hover:text-primary hover:ring-2 hover:ring-primary"
+            >
+              <Icon name="clock" className="h-5 w-5" />
+              {sentHistory.length > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-surface bg-primary px-1 text-[10px] font-bold text-primary-fg">
+                  {sentHistory.length}
+                </span>
+              )}
+            </button>
+            {profileMenu}
+          </div>
         </div>
       </header>
 
