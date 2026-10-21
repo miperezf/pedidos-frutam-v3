@@ -79,7 +79,8 @@ const db = getFirestore(app);
 //  v53.2 Directo funcional: Exporta = "[PROVEEDOR] DIRECTO A [OFICINA]" (se guarda en
 //        el mismo campo, sin cambios en Firestore), panel Consignee & Notify bajo
 //        los campos y bloque en el correo bajo Observaciones (oficinas en oficinas.ts)
-const APP_VERSION = "v53.2";
+//  v53.3 bloque del correo compacto: sin país, oficina en el título, datos en 2 columnas
+const APP_VERSION = "v53.3";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -1799,14 +1800,27 @@ const App = () => {
     const formattedExporta    = escapeHtml(orderHeader.exporta  || "");
     // v53.2: compra directa → Exporta destacado y bloque CONSIGNEE & NOTIFY
     const oficinaDirecto = detectarDirecto(orderHeader.exporta);
+    // v53.3: bloque compacto — sin país, nombre en el título y datos en 2 columnas
+    const directoTd =
+      "font-family:Arial,sans-serif;font-size:11px;line-height:1.35;color:#333333;mso-color-alt:#333333;text-align:left;vertical-align:top;";
+    const directoCols = oficinaDirecto
+      ? (() => {
+          const l = oficinaDirecto.lineas.map((x) => escapeHtml(x));
+          const mitad = Math.floor(l.length / 2) || l.length;
+          return [l.slice(0, mitad), l.slice(mitad)];
+        })()
+      : [[], []];
     const directoBlock = oficinaDirecto
       ? `
-  <table cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;border-collapse:collapse;width:100%;">
-    <tr><td style="border-left:4px solid #2563eb;background-color:#eef4ff;padding:10px 12px;font-family:Arial,sans-serif;font-size:11px;line-height:1.5;color:#333333;mso-color-alt:#333333;text-align:left;">
-      <span style="font-size:12px;font-weight:bold;">${escapeHtml(oficinaDirecto.pais)}</span><br>
-      <span style="font-size:12px;font-weight:bold;">CONSIGNEE &amp; NOTIFY</span><br>
-      <span style="font-weight:bold;">${escapeHtml(oficinaDirecto.nombre)}</span><br>
-      ${oficinaDirecto.lineas.map((l) => escapeHtml(l)).join("<br>\n      ")}
+  <table cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:100%;">
+    <tr><td style="border-left:3px solid #2563eb;background-color:#eef4ff;padding:5px 10px;">
+      <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;">
+        <tr><td colspan="2" style="${directoTd}padding-bottom:2px;"><b>CONSIGNEE &amp; NOTIFY:</b> <b style="color:#1d4ed8;">${escapeHtml(oficinaDirecto.nombre)}</b></td></tr>
+        <tr>
+          <td style="${directoTd}padding-right:16px;">${directoCols[0].join("<br>")}</td>
+          <td style="${directoTd}">${directoCols[1].join("<br>")}</td>
+        </tr>
+      </table>
     </td></tr>
   </table>`
       : "";
