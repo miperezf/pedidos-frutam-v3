@@ -71,7 +71,8 @@ const db = getFirestore(app);
 //        historial como reloj circular con la cantidad de envíos
 //  v52.8 perfil y ajustes en panel lateral (como el historial); reloj solo con envíos;
 //        íconos de la barra más pequeños
-const APP_VERSION = "v52.8";
+//  v52.9 campo Asunto con la misma altura que el resto
+const APP_VERSION = "v52.9";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -3531,7 +3532,7 @@ const App = () => {
               <InputField label="Nave" name="nave" value={headerInfo.nave} onChange={handleHeaderChange} onFocus={handleFocusField} onBlur={handleBlurField(handleHeaderBlur)} placeholder="Nombre de la nave" ref={(el) => (headerInputRefs.current.nave = el)} readOnly={currentOrderIsDeleted} />
               <InputField label="Fecha de carga" name="fechaCarga" type="date" value={headerInfo.fechaCarga} onChange={handleHeaderChange} onFocus={handleFocusField} onBlur={handleBlurField(handleHeaderBlur)} ref={(el) => (headerInputRefs.current.fechaCarga = el)} readOnly={currentOrderIsDeleted} />
               <InputField label="Exporta" name="exporta" value={headerInfo.exporta} onChange={handleHeaderChange} onFocus={handleFocusField} onBlur={handleBlurField(handleHeaderBlur)} placeholder="Exportadora" ref={(el) => (headerInputRefs.current.exporta = el)} readOnly={currentOrderIsDeleted} />
-              <InputField label="Asunto del email (automático)" name="emailSubject" value={headerInfo.emailSubject} onChange={handleHeaderChange} onBlur={handleHeaderBlur} ref={(el) => (headerInputRefs.current.emailSubject = el)} readOnly={true} className="font-mono text-xs" />
+              <InputField label="Asunto del email (automático)" name="emailSubject" value={headerInfo.emailSubject} onChange={handleHeaderChange} onBlur={handleHeaderBlur} ref={(el) => (headerInputRefs.current.emailSubject = el)} readOnly={true} className="font-mono" />
             </div>
 
             {/* Detalle */}
