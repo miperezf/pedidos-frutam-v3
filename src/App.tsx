@@ -92,7 +92,9 @@ const db = getFirestore(app);
 //  v53.11 ancho ajustado a 900 px: mismo alto que con 960 px
 //  v53.12 fichas compactas (12 px, "Rótulo: valor"): una de 460 px, o Consignee + Notify
 //         lado a lado en el ancho normal; País con "(PUERTO)" se reconoce y sugiere el puerto
-const APP_VERSION = "v53.12";
+//  v53.13 fichas con ancho fijo en px (atributo width) para que no se ensanchen al pegar
+//         en Outlook
+const APP_VERSION = "v53.13";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -1905,22 +1907,26 @@ const App = () => {
           return `<p style="margin:0 0 ${mb}px 0;${directoF}">${txt}</p>`;
         })
         .join("\n        ");
+    // v53.13: anchos SIEMPRE en px y como atributo HTML (Outlook/Word ignora el ancho
+    // del contenedor y estira lo que va en %). w = ancho total de la celda.
     const directoCelda = ([titulo, f], w) => `
-      <td width="${w}" style="width:${w}${/%$/.test(String(w)) ? "" : "px"};vertical-align:top;border-left:3px solid #2563eb;background-color:#eef4ff;padding:6px 10px;">
+      <td width="${w}" valign="top" style="width:${w - 13}px;vertical-align:top;border-left:3px solid #2563eb;background-color:#eef4ff;padding:6px 10px;">
         <p style="margin:0 0 4px 0;${directoF}"><b>${escapeHtml(titulo)}:</b> <b style="color:#1d4ed8;mso-color-alt:#1d4ed8;">${escapeHtml(f.nombre)}</b></p>
         ${directoLineas(f)}
       </td>`;
+    const directoTotalW = Math.max(460, (fixedWidth || 722) - 32);   // ancho útil del pedido
+    const directoMitadW = Math.floor((directoTotalW - 8) / 2);
     const directoBlock = directoFichas.length === 1
       ? `
-  <table cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:460px;">
+  <table width="460" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:460px;">
     <tr>${directoCelda(directoFichas[0], 460)}
     </tr>
   </table>`
       : directoFichas.length > 1
         ? `
-  <table cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:100%;">
-    <tr>${directoFichas.map((x) => directoCelda(x, "49%")).join(`
-      <td width="2%" style="width:2%;font-size:0;line-height:0;">&nbsp;</td>`)}
+  <table width="${directoTotalW}" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:${directoTotalW}px;">
+    <tr>${directoFichas.map((x) => directoCelda(x, directoMitadW)).join(`
+      <td width="8" style="width:8px;font-size:0;line-height:0;">&nbsp;</td>`)}
     </tr>
   </table>`
         : "";
