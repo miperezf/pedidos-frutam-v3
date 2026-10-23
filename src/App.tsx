@@ -95,7 +95,9 @@ const db = getFirestore(app);
 //  v53.13 fichas con ancho fijo en px (atributo width) para que no se ensanchen al pegar
 //         en Outlook
 //  v53.14 Consignee + Notify: pedido mínimo 740 px y más ancho para la dirección más larga
-const APP_VERSION = "v53.14";
+//  v53.15 correo con diseño M1 (corporativo sobrio): tarjeta blanca en tabla (sin franjas
+//         en Outlook), encabezado azul marino, líneas horizontales y total destacado
+const APP_VERSION = "v53.15";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -579,7 +581,7 @@ const App = () => {
       ordersToProcess.forEach((order, index) => {
         innerEmailContentHtml += `
             <div style="margin-bottom:8px;margin-left:16px;">
-              <h3 style="margin:0 0 6px 0;font-size:16px;color:#2563eb;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
+              <h3 style="margin:0 0 6px 0;font-size:16px;color:#1d4ed8;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
             </div>
             ${generateSingleOrderHtml(order.header, order.items, index + 1, maxWidth)}
         `;
@@ -1951,38 +1953,34 @@ const App = () => {
     // so Outlook respects font-size and color when HTML is pasted
 
     // ── v18: padding duplicado para mayor legibilidad en el email ──────────────
+    // ── v53.15 (M1 "corporativo sobrio"): encabezado azul marino, solo líneas
+    // horizontales, cebra suave y total destacado. Anchos como atributo HTML para
+    // que Outlook (Word) no aplaste la tabla.
     const thStyle =
-      "font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#ffffff;mso-color-alt:#ffffff;" +
-      "background-color:#2563eb;padding:4px 8px;" +
-      "border-top:1px solid #1e40af;border-bottom:1px solid #1e40af;" +
-      "border-left:1px solid #1e40af;border-right:1px solid #1e40af;" +
+      "font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#ffffff;mso-color-alt:#ffffff;" +
+      "background-color:#1e3a8a;padding:7px 8px;letter-spacing:0.4px;" +
       "text-align:center;white-space:nowrap;vertical-align:middle;";
 
     const tdBase =
-      "font-family:Arial,sans-serif;font-size:13px;color:#333333;mso-color-alt:#333333;" +
-      "padding:4px 8px;text-align:center;white-space:nowrap;vertical-align:middle;" +
-      "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
-      "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
+      "font-family:Arial,sans-serif;font-size:13px;color:#1f2937;mso-color-alt:#1f2937;" +
+      "padding:6px 8px;text-align:center;white-space:nowrap;vertical-align:middle;" +
+      "border-bottom:1px solid #e5e7eb;";
 
     const tdTotalLabel =
-      "font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#333333;mso-color-alt:#333333;" +
-      "background-color:#f0f0f0;padding:6px 14px 6px 6px;text-align:right;" +
-      "white-space:nowrap;vertical-align:middle;" +
-      "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
-      "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
+      "font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#1e3a8a;mso-color-alt:#1e3a8a;" +
+      "background-color:#eef2ff;padding:7px 14px 7px 6px;text-align:right;" +
+      "white-space:nowrap;vertical-align:middle;border-top:2px solid #1e3a8a;";
 
     const tdTotalValue =
-      "font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#333333;mso-color-alt:#333333;" +
-      "background-color:#f0f0f0;padding:6px 14px;text-align:center;" +
-      "white-space:nowrap;vertical-align:middle;" +
-      "border-top:1px solid #dddddd;border-bottom:1px solid #dddddd;" +
-      "border-left:1px solid #dddddd;border-right:1px solid #dddddd;";
+      "font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#1e3a8a;mso-color-alt:#1e3a8a;" +
+      "background-color:#eef2ff;padding:7px 14px;text-align:center;" +
+      "white-space:nowrap;vertical-align:middle;border-top:2px solid #1e3a8a;";
 
     const dataRowsHtml = orderItemsData
       .map((item, idx) => {
-        const rowBg = idx % 2 === 0 ? "#f9f9f9" : "#ffffff";
+        const rowBg = idx % 2 === 0 ? "#ffffff" : "#f8fafc";
         const cancelExtra = item.isCanceled
-          ? "color:#ef4444;text-decoration:line-through;"
+          ? "color:#dc2626;mso-color-alt:#dc2626;text-decoration:line-through;"
           : "";
         const td = tdBase + `background-color:${rowBg};` + cancelExtra;
         return (
@@ -2000,47 +1998,49 @@ const App = () => {
       .join("");
 
     const cardWidthStyle = fixedWidth ? `width:${fixedWidth}px;` : "";
-    const tableWidthStyle = fixedWidth ? `width:${fixedWidth - 32}px;` : "width:auto;";
+    const tableW = fixedWidth ? fixedWidth - 32 : null;
+    const tableWidthAttr = tableW ? ` width="${tableW}"` : "";
+    const tableWidthStyle = tableW ? `width:${tableW}px;` : "width:auto;";
+    const headP = "margin:0 0 3px 0;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;color:#0f172a;mso-color-alt:#0f172a;";
 
     return `
 <div style="margin-bottom:48px;margin-left:16px;display:inline-block;${cardWidthStyle}${orderBlockExtra}">
-<div style="font-family:Arial,sans-serif;font-size:13px;color:#333333;mso-color-alt:#333333;background-color:#f8f8f8;border:1px solid #dddddd;border-radius:8px;padding:15px;text-align:left;box-sizing:border-box;">
+<table${fixedWidth ? ` width="${fixedWidth}"` : ""} cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate;${cardWidthStyle}background-color:#ffffff;border:1px solid #dbe3ef;border-radius:8px;">
+<tr><td style="padding:14px 15px;background-color:#ffffff;border-radius:8px;font-family:Arial,sans-serif;font-size:13px;color:#1f2937;mso-color-alt:#1f2937;text-align:left;">
 
-  <div style="margin-bottom:10px;">
-    <p style="margin:0 0 3px 0;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;"><span style="font-weight:bold;">País:</span> ${formattedPais}</p>
-    <p style="margin:0 0 3px 0;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;"><span style="font-weight:bold;">Nave:</span> ${formattedNave}</p>
-    <p style="margin:0 0 3px 0;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;"><span style="font-weight:bold;">Fecha de carga:</span> ${formattedFechaCarga}</p>
-    <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;"><span style="font-weight:bold;">Exporta:</span> ${oficinaDirecto ? `<span style="color:#1d4ed8;font-weight:bold;">${formattedExporta}</span>` : formattedExporta}</p>
-  </div>
+  <p style="${headP}"><span style="font-weight:bold;">País:</span> ${formattedPais}</p>
+  <p style="${headP}"><span style="font-weight:bold;">Nave:</span> ${formattedNave}</p>
+  <p style="${headP}"><span style="font-weight:bold;">Fecha de carga:</span> ${formattedFechaCarga}</p>
+  <p style="${headP}margin-bottom:0;"><span style="font-weight:bold;">Exporta:</span> ${oficinaDirecto ? `<span style="color:#1d4ed8;font-weight:bold;">${formattedExporta}</span>` : formattedExporta}</p>
 
-  <table cellpadding="0" cellspacing="0" border="0"
-    style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${tableWidthStyle}table-layout:auto;margin-top:8px;">
+  <table${tableWidthAttr} cellpadding="0" cellspacing="0" border="0"
+    style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${tableWidthStyle}table-layout:auto;margin-top:12px;">
     <thead>
-      <tr style="background-color:#2563eb;">
-        <th style="${thStyle}">Pallets</th>
-        <th style="${thStyle}">Especie</th>
-        <th style="${thStyle}">Variedad</th>
-        <th style="${thStyle}">Formato</th>
-        <th style="${thStyle}">Calibre</th>
-        <th style="${thStyle}">Categoría</th>
-        <th style="${thStyle}">Precios ${incotermLabel}</th>
+      <tr style="background-color:#1e3a8a;">
+        <th style="${thStyle}">PALLETS</th>
+        <th style="${thStyle}">ESPECIE</th>
+        <th style="${thStyle}">VARIEDAD</th>
+        <th style="${thStyle}">FORMATO</th>
+        <th style="${thStyle}">CALIBRE</th>
+        <th style="${thStyle}">CATEGORÍA</th>
+        <th style="${thStyle}">PRECIOS ${incotermLabel}</th>
       </tr>
     </thead>
     <tbody>
       ${dataRowsHtml}
-      <tr style="background-color:#f0f0f0;">
-        <td colspan="6" style="${tdTotalLabel}">Total de Pallets:</td>
+      <tr style="background-color:#eef2ff;">
+        <td colspan="6" style="${tdTotalLabel}">Total de pallets</td>
         <td colspan="1" style="${tdTotalValue}">${singleOrderTotalPallets} Pallets</td>
       </tr>
     </tbody>
   </table>
 
-  <p style="margin-top:10px;margin-bottom:0;font-family:Arial,sans-serif;font-size:13px;font-weight:bold;">
-    Observaciones: <span style="font-weight:normal;font-style:italic;font-size:13px;font-family:Arial,sans-serif;">${consolidatedObservationsText}</span>
+  <p style="margin:12px 0 0 0;font-family:Arial,sans-serif;font-size:13px;color:#334155;mso-color-alt:#334155;">
+    <b>Observaciones:</b> <span style="font-style:italic;color:#475569;mso-color-alt:#475569;">${consolidatedObservationsText}</span>
   </p>
 ${directoBlock}
-
-</div>
+</td></tr>
+</table>
 </div>`;
   };
 
@@ -2566,7 +2566,7 @@ ${directoBlock}
       ordersToProcess.forEach((order, index) => {
         innerEmailContentHtml += `
             <div style="margin-bottom:8px;margin-left:16px;">
-              <h3 style="margin:0 0 6px 0;font-size:16px;color:#2563eb;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
+              <h3 style="margin:0 0 6px 0;font-size:16px;color:#1d4ed8;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
             </div>
             ${generateSingleOrderHtml(order.header, order.items, index + 1, maxWidth)}
         `;
@@ -2809,7 +2809,7 @@ ${directoBlock}
       ordersForPreview.forEach((order, index) => {
         innerPreviewHtml += `
             <div style="margin-bottom:8px;margin-left:16px;">
-              <h3 style="margin:0 0 6px 0;font-size:16px;color:#2563eb;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
+              <h3 style="margin:0 0 6px 0;font-size:16px;color:#1d4ed8;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
             </div>
             ${generateSingleOrderHtml(order.header, order.items, index + 1, maxWidth)}
         `;
