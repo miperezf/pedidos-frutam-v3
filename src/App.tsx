@@ -94,7 +94,8 @@ const db = getFirestore(app);
 //         lado a lado en el ancho normal; País con "(PUERTO)" se reconoce y sugiere el puerto
 //  v53.13 fichas con ancho fijo en px (atributo width) para que no se ensanchen al pegar
 //         en Outlook
-const APP_VERSION = "v53.13";
+//  v53.14 Consignee + Notify: pedido mínimo 740 px y más ancho para la dirección más larga
+const APP_VERSION = "v53.14";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -1857,8 +1858,11 @@ const App = () => {
 
     // Total table width = sum of all columns
     // Add card padding (15px each side = 30px) + border (2px)
-    // v53.12: las fichas Directo caben en el ancho normal (ya no se ensancha a 900 px)
-    return colWidths.reduce((a, b) => a + b, 0) + 32;
+    // v53.12: las fichas Directo caben en el ancho normal (ya no se ensancha a 900 px).
+    // v53.14: con Consignee + Notify, mínimo 740 px para que las direcciones no dejen
+    // una palabra sola en la última línea (ej. "RICA.")
+    const tableWidth = colWidths.reduce((a, b) => a + b, 0) + 32;
+    return detectarDirecto(orderHeader.exporta)?.notify ? Math.max(tableWidth, 740) : tableWidth;
   };
 
   const generateSingleOrderHtml = (
@@ -1910,12 +1914,19 @@ const App = () => {
     // v53.13: anchos SIEMPRE en px y como atributo HTML (Outlook/Word ignora el ancho
     // del contenedor y estira lo que va en %). w = ancho total de la celda.
     const directoCelda = ([titulo, f], w) => `
-      <td width="${w}" valign="top" style="width:${w - 13}px;vertical-align:top;border-left:3px solid #2563eb;background-color:#eef4ff;padding:6px 10px;">
+      <td width="${w}" valign="top" style="width:${w - 23}px;vertical-align:top;border-left:3px solid #2563eb;background-color:#eef4ff;padding:6px 10px;">
         <p style="margin:0 0 4px 0;${directoF}"><b>${escapeHtml(titulo)}:</b> <b style="color:#1d4ed8;mso-color-alt:#1d4ed8;">${escapeHtml(f.nombre)}</b></p>
         ${directoLineas(f)}
       </td>`;
     const directoTotalW = Math.max(460, (fixedWidth || 722) - 32);   // ancho útil del pedido
-    const directoMitadW = Math.floor((directoTotalW - 8) / 2);
+    // v53.14: la ficha con la dirección más larga recibe un poco más de ancho (47,5–52,5 %)
+    const directoAnchos = (() => {
+      const disp = directoTotalW - 8;
+      const [l0, l1] = directoFichas.map(([, f]) => String(f.direccion || "").length + 1);
+      const share = directoFichas.length > 1 ? Math.min(0.525, Math.max(0.475, l0 / (l0 + l1))) : 1;
+      const w0 = Math.round(disp * share);
+      return [w0, disp - w0];
+    })();
     const directoBlock = directoFichas.length === 1
       ? `
   <table width="460" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:460px;">
@@ -1925,7 +1936,7 @@ const App = () => {
       : directoFichas.length > 1
         ? `
   <table width="${directoTotalW}" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:${directoTotalW}px;">
-    <tr>${directoFichas.map((x) => directoCelda(x, directoMitadW)).join(`
+    <tr>${directoFichas.map((x, k) => directoCelda(x, directoAnchos[k])).join(`
       <td width="8" style="width:8px;font-size:0;line-height:0;">&nbsp;</td>`)}
     </tr>
   </table>`
