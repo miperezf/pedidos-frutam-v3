@@ -89,7 +89,8 @@ const db = getFirestore(app);
 //        (CALDERA / MOÍN / BALBOA) y ficha doble Consignee + Notify cuando son distintos
 //  v53.9 en el correo, las fichas Consignee y Notify van lado a lado
 //  v53.10 con Consignee + Notify, el pedido en el correo usa 960 px de ancho (O1)
-const APP_VERSION = "v53.10";
+//  v53.11 ancho ajustado a 900 px: mismo alto que con 960 px
+const APP_VERSION = "v53.11";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -1854,8 +1855,9 @@ const App = () => {
     // Add card padding (15px each side = 30px) + border (2px)
     const tableWidth = colWidths.reduce((a, b) => a + b, 0) + 32;
     // v53.10 (O1): con fichas Consignee + Notify lado a lado, el pedido usa al menos
-    // 960 px para que las direcciones se extiendan a lo ancho (menos alto)
-    return detectarDirecto(orderHeader.exporta)?.notify ? Math.max(tableWidth, 960) : tableWidth;
+    // 900 px (desde ese ancho las direcciones de Balboa ya quedan en 4 y 2 líneas;
+    // más ancho no reduce el alto)
+    return detectarDirecto(orderHeader.exporta)?.notify ? Math.max(tableWidth, 900) : tableWidth;
   };
 
   const generateSingleOrderHtml = (
