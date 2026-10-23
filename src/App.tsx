@@ -87,7 +87,8 @@ const db = getFirestore(app);
 //        ficha) y proveedor único por Mail ID: al cambiarlo se aplica a todos los pedidos
 //  v53.8 todas las oficinas Directo; Costa Rica por puerto con menú en el botón Directo
 //        (CALDERA / MOÍN / BALBOA) y ficha doble Consignee + Notify cuando son distintos
-const APP_VERSION = "v53.8";
+//  v53.9 en el correo, las fichas Consignee y Notify van lado a lado
+const APP_VERSION = "v53.9";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -1882,27 +1883,32 @@ const App = () => {
     const formattedExporta    = escapeHtml(orderHeader.exporta  || "");
     // v53.2: compra directa → Exporta destacado y bloque CONSIGNEE & NOTIFY
     const oficinaDirecto = detectarDirecto(orderHeader.exporta);
-    // v53.8: ficha con etiquetas alineadas, una columna hacia abajo. Si el Notify es
-    // otra empresa (ej. Costa Rica por Balboa) van dos fichas: CONSIGNEE y NOTIFY,
-    // con la columna de rótulos del mismo ancho en ambas.
+    // v53.9: ficha con etiquetas alineadas, una columna hacia abajo. Si el Notify es
+    // otra empresa (ej. Costa Rica por Balboa) van dos fichas lado a lado, CONSIGNEE
+    // y NOTIFY, en la misma fila (misma altura).
     const directoF = "font-family:Arial,sans-serif;font-size:13px;line-height:1.4;color:#333333;mso-color-alt:#333333;text-align:left;vertical-align:top;";
     const directoFichas = oficinaDirecto ? fichasOficina(oficinaDirecto) : [];
-    const directoLabW = Math.ceil(
-      Math.max(0, ...directoFichas.flatMap(([, f]) => datosFicha(f).map(([k]) => k.length))) * 7
-    );
-    const directoLab = `${directoF}font-weight:bold;color:#64748b;mso-color-alt:#64748b;padding:1px 8px 1px 0;white-space:nowrap;width:${directoLabW}px;`;
-    const directoVal = `${directoF}padding:1px 16px 1px 0;`;
-    const directoBlock = directoFichas
-      .map(([titulo, f], idx) => `
-  <table cellpadding="0" cellspacing="0" border="0" style="margin-top:${idx === 0 ? 8 : 6}px;border-collapse:collapse;width:100%;">
-    <tr><td style="border-left:3px solid #2563eb;background-color:#eef4ff;padding:6px 10px;">
-      <p style="margin:0 0 4px 0;${directoF}"><b>${escapeHtml(titulo)}:</b> <b style="color:#1d4ed8;mso-color-alt:#1d4ed8;">${escapeHtml(f.nombre)}</b></p>
-      <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
-        ${datosFicha(f).map(([k, v]) => `<tr><td style="${directoLab}">${escapeHtml(k)}</td><td style="${directoVal}">${escapeHtml(v)}</td></tr>`).join("\n        ")}
-      </table>
-    </td></tr>
-  </table>`)
-      .join("");
+    // ancho de rótulos por ficha (en 2 columnas cada una aprovecha su espacio)
+    const directoLab = (f) =>
+      `${directoF}font-weight:bold;color:#64748b;mso-color-alt:#64748b;padding:1px 8px 1px 0;white-space:nowrap;width:${Math.ceil(Math.max(0, ...datosFicha(f).map(([k]) => k.length)) * 7)}px;`;
+    const directoVal = `${directoF}padding:1px ${directoFichas.length > 1 ? 4 : 16}px 1px 0;`;
+    const directoColW = directoFichas.length > 1 ? "49%" : "100%";
+    const directoBlock = directoFichas.length
+      ? `
+  <table cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:100%;">
+    <tr>${directoFichas
+      .map(([titulo, f]) => `
+      <td width="${directoColW}" style="width:${directoColW};vertical-align:top;border-left:3px solid #2563eb;background-color:#eef4ff;padding:6px 10px;">
+        <p style="margin:0 0 4px 0;${directoF}"><b>${escapeHtml(titulo)}:</b> <b style="color:#1d4ed8;mso-color-alt:#1d4ed8;">${escapeHtml(f.nombre)}</b></p>
+        <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+          ${datosFicha(f).map(([k, v]) => `<tr><td style="${directoLab(f)}">${escapeHtml(k)}</td><td style="${directoVal}">${escapeHtml(v)}</td></tr>`).join("\n          ")}
+        </table>
+      </td>`)
+      .join(`
+      <td width="2%" style="width:2%;font-size:0;line-height:0;">&nbsp;</td>`)}
+    </tr>
+  </table>`
+      : "";
     const incotermLabel       = escapeHtml(orderHeader.incoterm || "FOB");
 
     const orderBlockExtra = orderHeader.status === "deleted"
