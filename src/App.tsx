@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Icon, Spinner, Button, IconButton, Badge, Modal, useConfirm, useToasts } from "./ui";
-import { detectarDirecto, exportaDirecto, oficinasDePais, datosFicha, fichasOficina } from "./oficinas";
+import { detectarDirecto, exportaDirecto, oficinasDePais, datosFicha, fichasOficina, normalizarTexto } from "./oficinas";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -90,7 +90,9 @@ const db = getFirestore(app);
 //  v53.9 en el correo, las fichas Consignee y Notify van lado a lado
 //  v53.10 con Consignee + Notify, el pedido en el correo usa 960 px de ancho (O1)
 //  v53.11 ancho ajustado a 900 px: mismo alto que con 960 px
-const APP_VERSION = "v53.11";
+//  v53.12 fichas compactas (12 px, "Rótulo: valor"): una de 460 px, o Consignee + Notify
+//         lado a lado en el ancho normal; País con "(PUERTO)" se reconoce y sugiere el puerto
+const APP_VERSION = "v53.12";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -1853,11 +1855,8 @@ const App = () => {
 
     // Total table width = sum of all columns
     // Add card padding (15px each side = 30px) + border (2px)
-    const tableWidth = colWidths.reduce((a, b) => a + b, 0) + 32;
-    // v53.10 (O1): con fichas Consignee + Notify lado a lado, el pedido usa al menos
-    // 900 px (desde ese ancho las direcciones de Balboa ya quedan en 4 y 2 líneas;
-    // más ancho no reduce el alto)
-    return detectarDirecto(orderHeader.exporta)?.notify ? Math.max(tableWidth, 900) : tableWidth;
+    // v53.12: las fichas Directo caben en el ancho normal (ya no se ensancha a 900 px)
+    return colWidths.reduce((a, b) => a + b, 0) + 32;
   };
 
   const generateSingleOrderHtml = (
@@ -1889,32 +1888,42 @@ const App = () => {
     const formattedExporta    = escapeHtml(orderHeader.exporta  || "");
     // v53.2: compra directa → Exporta destacado y bloque CONSIGNEE & NOTIFY
     const oficinaDirecto = detectarDirecto(orderHeader.exporta);
-    // v53.9: ficha con etiquetas alineadas, una columna hacia abajo. Si el Notify es
-    // otra empresa (ej. Costa Rica por Balboa) van dos fichas lado a lado, CONSIGNEE
-    // y NOTIFY, en la misma fila (misma altura).
-    const directoF = "font-family:Arial,sans-serif;font-size:13px;line-height:1.4;color:#333333;mso-color-alt:#333333;text-align:left;vertical-align:top;";
+    // v53.12 (T2 + T3): ficha compacta como la tarjeta que se usaba a mano en el
+    // correo: 12 px, dirección y nota como texto, el resto "Rótulo: valor" en línea.
+    // Una ficha → 460 px alineada a la izquierda. Consignee + Notify → lado a lado
+    // dentro del ancho normal del pedido.
+    const directoF = "font-family:Arial,sans-serif;font-size:12px;line-height:1.4;color:#333333;mso-color-alt:#333333;text-align:left;";
     const directoFichas = oficinaDirecto ? fichasOficina(oficinaDirecto) : [];
-    // ancho de rótulos por ficha (en 2 columnas cada una aprovecha su espacio)
-    const directoLab = (f) =>
-      `${directoF}font-weight:bold;color:#64748b;mso-color-alt:#64748b;padding:1px 8px 1px 0;white-space:nowrap;width:${Math.ceil(Math.max(0, ...datosFicha(f).map(([k]) => k.length)) * 7)}px;`;
-    const directoVal = `${directoF}padding:1px ${directoFichas.length > 1 ? 4 : 16}px 1px 0;`;
-    const directoColW = directoFichas.length > 1 ? "49%" : "100%";
-    const directoBlock = directoFichas.length
-      ? `
-  <table cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:100%;">
-    <tr>${directoFichas
-      .map(([titulo, f]) => `
-      <td width="${directoColW}" style="width:${directoColW};vertical-align:top;border-left:3px solid #2563eb;background-color:#eef4ff;padding:6px 10px;">
+    const directoLineas = (f) =>
+      datosFicha(f)
+        .map(([k, v], idx) => {
+          const sinRotulo = k === "Dirección" || k === "Nota";
+          const mb = sinRotulo ? 3 : 1;
+          const txt = sinRotulo
+            ? escapeHtml(v)
+            : `<span style="font-weight:bold;color:#64748b;mso-color-alt:#64748b;">${escapeHtml(k)}:</span> ${escapeHtml(v)}`;
+          return `<p style="margin:0 0 ${mb}px 0;${directoF}">${txt}</p>`;
+        })
+        .join("\n        ");
+    const directoCelda = ([titulo, f], w) => `
+      <td width="${w}" style="width:${w}${/%$/.test(String(w)) ? "" : "px"};vertical-align:top;border-left:3px solid #2563eb;background-color:#eef4ff;padding:6px 10px;">
         <p style="margin:0 0 4px 0;${directoF}"><b>${escapeHtml(titulo)}:</b> <b style="color:#1d4ed8;mso-color-alt:#1d4ed8;">${escapeHtml(f.nombre)}</b></p>
-        <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
-          ${datosFicha(f).map(([k, v]) => `<tr><td style="${directoLab(f)}">${escapeHtml(k)}</td><td style="${directoVal}">${escapeHtml(v)}</td></tr>`).join("\n          ")}
-        </table>
-      </td>`)
-      .join(`
+        ${directoLineas(f)}
+      </td>`;
+    const directoBlock = directoFichas.length === 1
+      ? `
+  <table cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:460px;">
+    <tr>${directoCelda(directoFichas[0], 460)}
+    </tr>
+  </table>`
+      : directoFichas.length > 1
+        ? `
+  <table cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:100%;">
+    <tr>${directoFichas.map((x) => directoCelda(x, "49%")).join(`
       <td width="2%" style="width:2%;font-size:0;line-height:0;">&nbsp;</td>`)}
     </tr>
   </table>`
-      : "";
+        : "";
     const incotermLabel       = escapeHtml(orderHeader.incoterm || "FOB");
 
     const orderBlockExtra = orderHeader.status === "deleted"
@@ -3083,6 +3092,9 @@ ${directoBlock}
   // v53.8: con varias oficinas en el país (Costa Rica por puerto) Directo abre un
   // menú y obliga a elegir; con una sola, Directo funciona como interruptor.
   const directoConPuertos = oficinasPais.length > 1;
+  // v53.12: si el País trae el puerto entre paréntesis ("COSTA RICA (CALDERA)"), se sugiere
+  const puertoEnPais = normalizarTexto((String(headerInfo.deNombrePais || "").match(/\(([^)]*)\)/) || [])[1]);
+  const puertoSugerido = puertoEnPais ? oficinasPais.find((o) => normalizarTexto(o.puerto) === puertoEnPais) : null;
   const desactivarDirecto = () => {
     setDirectoMenuOpen(false);
     applyExporta(prevExportaRef.current[activeOrderId] ?? "");
@@ -3743,18 +3755,24 @@ ${directoBlock}
                         </p>
                         {oficinasPais.map((o) => {
                           const activo = directoOficina?.id === o.id;
+                          const sugerido = !directoOficina && puertoSugerido?.id === o.id;
                           return (
                             <button
                               key={o.id}
                               type="button"
                               role="menuitemradio"
                               aria-checked={activo}
+                              autoFocus={sugerido || activo}
                               onClick={() => chooseOficina(o.id)}
-                              className={`flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-2 ${activo ? "bg-primary-soft" : ""}`}
+                              className={`flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-2 ${activo || sugerido ? "bg-primary-soft" : ""}`}
+                              data-sugerido={sugerido || undefined}
                             >
                               <Icon name="anchor" className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                               <span className="min-w-0">
-                                <span className="block text-sm font-semibold text-fg">{o.puerto || o.nombre}</span>
+                                <span className="flex items-center gap-1.5 text-sm font-semibold text-fg">
+                                  {o.puerto || o.nombre}
+                                  {sugerido && <span className="rounded bg-primary px-1.5 py-px text-[10px] font-semibold text-primary-fg">Según País</span>}
+                                </span>
                                 <span className="block text-[11px] text-muted">
                                   {o.notify ? `Consignee ${o.nombre} · Notify ${o.notify.nombre}` : `${o.nombre} (Consignee & Notify)`}
                                 </span>
@@ -3835,6 +3853,11 @@ ${directoBlock}
                   {paisDistinto && (
                     <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-warning">
                       <Icon name="warning" className="h-4 w-4" />El País del pedido no coincide con la oficina ({directoOficina.pais}).
+                    </p>
+                  )}
+                  {!paisDistinto && directoConPuertos && puertoEnPais && directoOficina.puerto && normalizarTexto(directoOficina.puerto) !== puertoEnPais && (
+                    <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-warning">
+                      <Icon name="warning" className="h-4 w-4" />El País indica otro puerto ({puertoEnPais}); Directo está con {directoOficina.puerto}.
                     </p>
                   )}
                 </div>

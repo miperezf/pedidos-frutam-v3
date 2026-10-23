@@ -146,9 +146,12 @@ export const normalizarTexto = (s: unknown): string =>
     .replace(/\s+/g, " ")
     .trim();
 
+/** País sin lo que va entre paréntesis: "COLOMBIA (BUENAVENTURA)" → "COLOMBIA". */
+export const paisBase = (pais: unknown): string => normalizarTexto(String(pais ?? "").replace(/\([^)]*\)/g, " "));
+
 /** Oficinas del país (por nombre o alias), ordenadas por puerto. */
 export const oficinasDePais = (pais: unknown, lista: Oficina[] = OFICINAS): Oficina[] => {
-  const p = normalizarTexto(pais);
+  const p = paisBase(pais);
   if (!p) return [];
   return lista
     .filter((o) => [o.pais, ...(o.alias || [])].some((x) => normalizarTexto(x) === p))
