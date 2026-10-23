@@ -97,7 +97,8 @@ const db = getFirestore(app);
 //  v53.14 Consignee + Notify: pedido mínimo 740 px y más ancho para la dirección más larga
 //  v53.15 correo con diseño M1 (corporativo sobrio): tarjeta blanca en tabla (sin franjas
 //         en Outlook), encabezado azul marino, líneas horizontales y total destacado
-const APP_VERSION = "v53.15";
+//  v53.16 Observaciones debajo de las fichas Consignee / Notify
+const APP_VERSION = "v53.16";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -1931,13 +1932,13 @@ const App = () => {
     })();
     const directoBlock = directoFichas.length === 1
       ? `
-  <table width="460" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:460px;">
+  <table width="460" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;border-collapse:collapse;width:460px;">
     <tr>${directoCelda(directoFichas[0], 460)}
     </tr>
   </table>`
       : directoFichas.length > 1
         ? `
-  <table width="${directoTotalW}" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:${directoTotalW}px;">
+  <table width="${directoTotalW}" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;border-collapse:collapse;width:${directoTotalW}px;">
     <tr>${directoFichas.map((x, k) => directoCelda(x, directoAnchos[k])).join(`
       <td width="8" style="width:8px;font-size:0;line-height:0;">&nbsp;</td>`)}
     </tr>
@@ -2035,10 +2036,10 @@ const App = () => {
     </tbody>
   </table>
 
+${directoBlock}
   <p style="margin:12px 0 0 0;font-family:Arial,sans-serif;font-size:13px;color:#334155;mso-color-alt:#334155;">
     <b>Observaciones:</b> <span style="font-style:italic;color:#475569;mso-color-alt:#475569;">${consolidatedObservationsText}</span>
   </p>
-${directoBlock}
 </td></tr>
 </table>
 </div>`;
