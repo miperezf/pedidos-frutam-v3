@@ -88,7 +88,8 @@ const db = getFirestore(app);
 //  v53.8 todas las oficinas Directo; Costa Rica por puerto con menú en el botón Directo
 //        (CALDERA / MOÍN / BALBOA) y ficha doble Consignee + Notify cuando son distintos
 //  v53.9 en el correo, las fichas Consignee y Notify van lado a lado
-const APP_VERSION = "v53.9";
+//  v53.10 con Consignee + Notify, el pedido en el correo usa 960 px de ancho (O1)
+const APP_VERSION = "v53.10";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -1851,7 +1852,10 @@ const App = () => {
 
     // Total table width = sum of all columns
     // Add card padding (15px each side = 30px) + border (2px)
-    return colWidths.reduce((a, b) => a + b, 0) + 32;
+    const tableWidth = colWidths.reduce((a, b) => a + b, 0) + 32;
+    // v53.10 (O1): con fichas Consignee + Notify lado a lado, el pedido usa al menos
+    // 960 px para que las direcciones se extiendan a lo ancho (menos alto)
+    return detectarDirecto(orderHeader.exporta)?.notify ? Math.max(tableWidth, 960) : tableWidth;
   };
 
   const generateSingleOrderHtml = (
