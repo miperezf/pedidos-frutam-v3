@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Icon, Spinner, Button, IconButton, Badge, Modal, useConfirm, useToasts } from "./ui";
-import { detectarDirecto, exportaDirecto, oficinasDePais, normalizarTexto, datosOficina } from "./oficinas";
+import { detectarDirecto, exportaDirecto, oficinasDePais, datosFicha, fichasOficina } from "./oficinas";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -85,7 +85,9 @@ const db = getFirestore(app);
 //  v53.6 ficha en una columna: Dirección, RUC, Contacto, Correo, Teléfono
 //  v53.7 correo con tamaños estándar (16 título / 14 cabecera / 13 tabla, observaciones y
 //        ficha) y proveedor único por Mail ID: al cambiarlo se aplica a todos los pedidos
-const APP_VERSION = "v53.7";
+//  v53.8 todas las oficinas Directo; Costa Rica por puerto con menú en el botón Directo
+//        (CALDERA / MOÍN / BALBOA) y ficha doble Consignee + Notify cuando son distintos
+const APP_VERSION = "v53.8";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -283,6 +285,8 @@ const App = () => {
 
   // ─── ACTUALIZACIÓN DE VERSIÓN ────────────────────────────────────────────────
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [directoMenuOpen, setDirectoMenuOpen] = useState(false); // v53.8: menú de puertos
+  const directoMenuRef = useRef(null);
 
   // ─── EMAIL CLIENT CONFIG ─────────────────────────────────────────────────────
   const EMAIL_CLIENT_KEY = "frutam_email_client";
@@ -323,6 +327,16 @@ const App = () => {
   const [showRowHelp, setShowRowHelp] = useState(false); // v52.2: ayuda de acciones de fila
   // v53.2: Exporta anterior por pedido, para restaurarlo al desactivar Directo
   const prevExportaRef = useRef({});
+  // v53.8: el menú de puertos se cierra con Esc, clic fuera o al cambiar de pedido
+  useEffect(() => {
+    if (!directoMenuOpen) return;
+    const onDown = (e) => { if (directoMenuRef.current && !directoMenuRef.current.contains(e.target)) setDirectoMenuOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setDirectoMenuOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [directoMenuOpen]);
+  useEffect(() => { setDirectoMenuOpen(false); }, [activeOrderId]);
   // v52.8: perfil y ajustes en panel lateral (Modal drawer: Esc y foco incluidos)
 
   // v52.1: diagnóstico de conexión (se muestra en pantalla y en Configuración)
@@ -1418,13 +1432,15 @@ const App = () => {
     // v53.2: si cambia el País de un pedido Directo, se ajusta la oficina
     if (name === "deNombrePais") {
       const actual = detectarDirecto(headerInfoRef.current.exporta);
-      if (actual && normalizarTexto(actual.pais) !== normalizarTexto(value)) {
+      if (actual && !oficinasDePais(value).some((o) => o.id === actual.id)) {
         const nuevas = oficinasDePais(value);
-        const nuevoExporta = nuevas.length
+        // Con una sola oficina se cambia sola; con varias (puertos) hay que elegir.
+        const nuevoExporta = nuevas.length === 1
           ? exportaDirecto(headerInfoRef.current.reDestinatarios, nuevas[0])
           : prevExportaRef.current[activeOrderIdRef.current] ?? "";
         setHeaderInfo((prevInfo) => ({ ...prevInfo, exporta: nuevoExporta }));
         if (!nuevas.length) notify("info", `Directo se desactivó: no hay oficina configurada para ${value.toUpperCase() || "ese país"}.`);
+        else if (nuevas.length > 1) notify("info", `Directo se desactivó: elige el puerto para ${value.toUpperCase()} en el botón Directo.`);
       }
     }
   };
@@ -1866,27 +1882,27 @@ const App = () => {
     const formattedExporta    = escapeHtml(orderHeader.exporta  || "");
     // v53.2: compra directa → Exporta destacado y bloque CONSIGNEE & NOTIFY
     const oficinaDirecto = detectarDirecto(orderHeader.exporta);
-    // v53.6: ficha con etiquetas alineadas (opción A), en una columna hacia abajo:
-    // Dirección, RUC, Contacto, Correo, Teléfono
+    // v53.8: ficha con etiquetas alineadas, una columna hacia abajo. Si el Notify es
+    // otra empresa (ej. Costa Rica por Balboa) van dos fichas: CONSIGNEE y NOTIFY,
+    // con la columna de rótulos del mismo ancho en ambas.
     const directoF = "font-family:Arial,sans-serif;font-size:13px;line-height:1.4;color:#333333;mso-color-alt:#333333;text-align:left;vertical-align:top;";
-    const directoLab = `${directoF}font-weight:bold;color:#64748b;mso-color-alt:#64748b;padding:1px 8px 1px 0;white-space:nowrap;`;
+    const directoFichas = oficinaDirecto ? fichasOficina(oficinaDirecto) : [];
+    const directoLabW = Math.ceil(
+      Math.max(0, ...directoFichas.flatMap(([, f]) => datosFicha(f).map(([k]) => k.length))) * 7
+    );
+    const directoLab = `${directoF}font-weight:bold;color:#64748b;mso-color-alt:#64748b;padding:1px 8px 1px 0;white-space:nowrap;width:${directoLabW}px;`;
     const directoVal = `${directoF}padding:1px 16px 1px 0;`;
-    const directoRows = oficinaDirecto
-      ? datosOficina(oficinaDirecto)
-          .map(([k, v]) => `<tr><td style="${directoLab}">${escapeHtml(k)}</td><td style="${directoVal}">${escapeHtml(v)}</td></tr>`)
-          .join("\n        ")
-      : "";
-    const directoBlock = oficinaDirecto
-      ? `
-  <table cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;width:100%;">
+    const directoBlock = directoFichas
+      .map(([titulo, f], idx) => `
+  <table cellpadding="0" cellspacing="0" border="0" style="margin-top:${idx === 0 ? 8 : 6}px;border-collapse:collapse;width:100%;">
     <tr><td style="border-left:3px solid #2563eb;background-color:#eef4ff;padding:6px 10px;">
-      <p style="margin:0 0 4px 0;${directoF}"><b>CONSIGNEE &amp; NOTIFY:</b> <b style="color:#1d4ed8;mso-color-alt:#1d4ed8;">${escapeHtml(oficinaDirecto.nombre)}</b></p>
+      <p style="margin:0 0 4px 0;${directoF}"><b>${escapeHtml(titulo)}:</b> <b style="color:#1d4ed8;mso-color-alt:#1d4ed8;">${escapeHtml(f.nombre)}</b></p>
       <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
-        ${directoRows}
+        ${datosFicha(f).map(([k, v]) => `<tr><td style="${directoLab}">${escapeHtml(k)}</td><td style="${directoVal}">${escapeHtml(v)}</td></tr>`).join("\n        ")}
       </table>
     </td></tr>
-  </table>`
-      : "";
+  </table>`)
+      .join("");
     const incotermLabel       = escapeHtml(orderHeader.incoterm || "FOB");
 
     const orderBlockExtra = orderHeader.status === "deleted"
@@ -3052,22 +3068,35 @@ ${directoBlock}
       .catch(() => {})
       .finally(() => { isUserEditing.current = false; });
   };
+  // v53.8: con varias oficinas en el país (Costa Rica por puerto) Directo abre un
+  // menú y obliga a elegir; con una sola, Directo funciona como interruptor.
+  const directoConPuertos = oficinasPais.length > 1;
+  const desactivarDirecto = () => {
+    setDirectoMenuOpen(false);
+    applyExporta(prevExportaRef.current[activeOrderId] ?? "");
+  };
+  const chooseOficina = (id) => {
+    const o = oficinasPais.find((x) => x.id === id);
+    setDirectoMenuOpen(false);
+    if (!o) return;
+    if (!directoOficina) prevExportaRef.current[activeOrderId] = headerInfo.exporta || "";
+    applyExporta(exportaDirecto(headerInfo.reDestinatarios, o));
+  };
   const toggleDirecto = () => {
     if (currentOrderIsDeleted || !activeOrderId) return;
+    if (directoConPuertos) {
+      setDirectoMenuOpen((v) => !v);
+      return;
+    }
     if (directoOficina) {
-      applyExporta(prevExportaRef.current[activeOrderId] ?? "");
+      desactivarDirecto();
       return;
     }
     if (!oficinasPais.length) {
       notify("info", `No hay oficina configurada para "${headerInfo.deNombrePais || "sin país"}". Completa el País o pide agregar la oficina.`);
       return;
     }
-    prevExportaRef.current[activeOrderId] = headerInfo.exporta || "";
-    applyExporta(exportaDirecto(headerInfo.reDestinatarios, oficinasPais[0]));
-  };
-  const chooseOficina = (id) => {
-    const o = oficinasPais.find((x) => x.id === id);
-    if (o) applyExporta(exportaDirecto(headerInfo.reDestinatarios, o));
+    chooseOficina(oficinasPais[0].id);
   };
 
   // v52.1: resumen de un pedido para el navegador (especies y pallets no cancelados)
@@ -3670,24 +3699,67 @@ ${directoBlock}
               <div className="min-w-0">
                 <div className="mb-1.5 flex h-6 items-center justify-between gap-2">
                   <label htmlFor="exporta" className="label mb-0">Exporta</label>
-                  <div className={`inline-flex overflow-hidden rounded-md border border-line-strong ${currentOrderIsDeleted ? "pointer-events-none opacity-50" : ""}`}>
-                    <button
-                      type="button"
-                      aria-pressed={!!directoOficina}
-                      aria-label={`Directo: ${directoOficina ? "Sí" : "No"}`}
-                      title={
-                        directoOficina
-                          ? `Directo a ${directoOficina.nombre} (clic para desactivar)`
-                          : oficinasPais.length
-                            ? `Marcar como compra directa a ${oficinasPais[0].nombre}`
-                            : "Directo: requiere un País con oficina configurada"
-                      }
-                      onClick={toggleDirecto}
-                      disabled={currentOrderIsDeleted}
-                      className={`px-2.5 py-0.5 text-xs leading-4 font-semibold transition-colors ${directoOficina ? "bg-primary text-primary-fg" : "bg-surface text-muted hover:bg-surface-2 hover:text-fg"}`}
-                    >
-                      Directo
-                    </button>
+                  <div className="relative" ref={directoMenuRef}>
+                    <div className={`inline-flex overflow-hidden rounded-md border border-line-strong ${currentOrderIsDeleted ? "pointer-events-none opacity-50" : ""}`}>
+                      <button
+                        type="button"
+                        aria-pressed={!!directoOficina}
+                        aria-label={`Directo: ${directoOficina ? "Sí" : "No"}${directoOficina?.puerto && directoConPuertos ? ` (${directoOficina.puerto})` : ""}`}
+                        aria-haspopup={directoConPuertos ? "menu" : undefined}
+                        aria-expanded={directoConPuertos ? directoMenuOpen : undefined}
+                        title={
+                          directoConPuertos
+                            ? `Directo a ${headerInfo.deNombrePais?.toUpperCase()}: elegir puerto`
+                            : directoOficina
+                              ? `Directo a ${directoOficina.nombre} (clic para desactivar)`
+                              : oficinasPais.length
+                                ? `Marcar como compra directa a ${oficinasPais[0].nombre}`
+                                : "Directo: requiere un País con oficina configurada"
+                        }
+                        onClick={toggleDirecto}
+                        disabled={currentOrderIsDeleted}
+                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 text-xs leading-4 font-semibold transition-colors ${directoOficina ? "bg-primary text-primary-fg" : "bg-surface text-muted hover:bg-surface-2 hover:text-fg"}`}
+                      >
+                        {directoOficina && directoConPuertos && directoOficina.puerto ? `Directo · ${directoOficina.puerto}` : "Directo"}
+                        {directoConPuertos && <Icon name="chevronDown" className="h-3 w-3" />}
+                      </button>
+                    </div>
+                    {directoConPuertos && directoMenuOpen && (
+                      <div role="menu" aria-label="Elegir puerto" className="absolute top-8 right-0 z-30 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-line bg-surface text-left shadow-2xl" data-testid="menu-puertos">
+                        <p className="border-b border-line bg-surface-2 px-3 py-2 text-[11px] font-semibold tracking-wide text-muted uppercase">
+                          Directo a {oficinasPais[0].pais} · elige el puerto
+                        </p>
+                        {oficinasPais.map((o) => {
+                          const activo = directoOficina?.id === o.id;
+                          return (
+                            <button
+                              key={o.id}
+                              type="button"
+                              role="menuitemradio"
+                              aria-checked={activo}
+                              onClick={() => chooseOficina(o.id)}
+                              className={`flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-2 ${activo ? "bg-primary-soft" : ""}`}
+                            >
+                              <Icon name="anchor" className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                              <span className="min-w-0">
+                                <span className="block text-sm font-semibold text-fg">{o.puerto || o.nombre}</span>
+                                <span className="block text-[11px] text-muted">
+                                  {o.notify ? `Consignee ${o.nombre} · Notify ${o.notify.nombre}` : `${o.nombre} (Consignee & Notify)`}
+                                </span>
+                              </span>
+                              {activo && <Icon name="check" className="ml-auto h-4 w-4 shrink-0 text-primary" />}
+                            </button>
+                          );
+                        })}
+                        {directoOficina ? (
+                          <button type="button" role="menuitem" onClick={desactivarDirecto} className="w-full border-t border-line px-3 py-2 text-left text-xs font-semibold text-danger hover:bg-danger-soft">
+                            Quitar Directo
+                          </button>
+                        ) : (
+                          <p className="border-t border-line px-3 py-1.5 text-[11px] text-muted">Directo no se activa hasta elegir un puerto.</p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <input
@@ -3702,58 +3774,51 @@ ${directoBlock}
                   className={`field ${directoOficina ? "border-primary-line bg-primary-soft font-semibold text-primary" : ""}`}
                   ref={(el) => (headerInputRefs.current.exporta = el)}
                   readOnly={currentOrderIsDeleted || !!directoOficina}
-                  title={directoOficina ? "Automático por Directo. Desactiva Directo para editarlo." : undefined}
+                  title={directoOficina ? `${headerInfo.exporta}\nAutomático por Directo. Desactiva Directo para editarlo.` : undefined}
                   autoComplete="off"
                 />
                 {directoOficina && (
                   <p className="mt-1 flex items-center gap-1 text-[11px] text-primary">
-                    <Icon name="lock" className="h-3 w-3" />Automático por Directo ({directoOficina.pais})
+                    <Icon name="lock" className="h-3 w-3" />Automático por Directo ({directoOficina.pais}{directoConPuertos && directoOficina.puerto ? ` · ${directoOficina.puerto}` : ""})
                   </p>
                 )}
               </div>
               <InputField label="Asunto del email (automático)" name="emailSubject" value={headerInfo.emailSubject} onChange={handleHeaderChange} onBlur={handleHeaderBlur} ref={(el) => (headerInputRefs.current.emailSubject = el)} readOnly={true} className="font-mono" />
             </div>
 
-            {/* v53.2: panel Consignee & Notify (compra directa) */}
+            {/* v53.8: panel Consignee & Notify (compra directa) — mismas fichas que el correo */}
             {directoOficina && (() => {
-              const lineas = [directoOficina.nombre, ...datosOficina(directoOficina).map(([k, v]) => (k === "Dirección" ? v : `${k.toUpperCase()}: ${v}`))];
-              const mitad = Math.ceil(lineas.length / 2);
-              const paisDistinto = normalizarTexto(directoOficina.pais) !== normalizarTexto(headerInfo.deNombrePais);
+              const fichas = fichasOficina(directoOficina);
+              const paisDistinto = !oficinasDePais(headerInfo.deNombrePais).some((o) => o.id === directoOficina.id);
               return (
                 <div className="mx-4 mb-5 rounded-xl border border-primary-line bg-primary-soft/50 p-4 sm:mx-5" data-testid="panel-directo">
-                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
                     <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-fg">
                       <Icon name="building" className="h-4 w-4" />
                     </span>
                     <p className="text-sm font-semibold text-fg">
-                      Consignee &amp; Notify · <span className="text-primary">{directoOficina.pais}</span>
+                      {directoOficina.notify ? "Consignee y Notify" : "Consignee & Notify"} ·{" "}
+                      <span className="text-primary">{directoOficina.pais}{directoConPuertos && directoOficina.puerto ? ` · ${directoOficina.puerto}` : ""}</span>
                     </p>
-                    {oficinasPais.length > 1 && (
-                      <label className="ml-2 flex items-center gap-2 text-xs text-muted">
-                        Puerto
-                        <select
-                          className="field h-8 w-auto py-0 text-xs"
-                          value={directoOficina.id}
-                          onChange={(e) => chooseOficina(e.target.value)}
-                          disabled={currentOrderIsDeleted}
-                        >
-                          {oficinasPais.map((o) => (
-                            <option key={o.id} value={o.id}>{o.puerto || o.nombre}</option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
                     <span className="ml-auto text-xs text-muted">Se incluirá en el correo de este pedido</span>
                   </div>
-                  <div className="grid grid-cols-1 gap-x-6 text-xs leading-relaxed text-fg-2 sm:grid-cols-2">
-                    <div>
-                      {lineas.slice(0, mitad).map((l, i) => (
-                        <p key={i} className={i === 0 ? "font-semibold text-fg" : ""}>{l}</p>
-                      ))}
-                    </div>
-                    <div>
-                      {lineas.slice(mitad).map((l, i) => <p key={i}>{l}</p>)}
-                    </div>
+                  <div className={`grid grid-cols-1 gap-3 ${fichas.length > 1 ? "md:grid-cols-2" : ""}`}>
+                    {fichas.map(([titulo, f]) => (
+                      <div key={titulo} className="min-w-0 rounded-lg border border-primary-line bg-surface/70 p-3" data-testid="ficha-directo">
+                        <p className="mb-1.5 text-xs font-semibold text-fg">
+                          {titulo === "CONSIGNEE & NOTIFY" ? "Consignee & Notify" : titulo === "CONSIGNEE" ? "Consignee" : "Notify"}:{" "}
+                          <span className="text-primary">{f.nombre}</span>
+                        </p>
+                        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11px] leading-snug">
+                          {datosFicha(f).map(([k, v]) => (
+                            <React.Fragment key={k}>
+                              <dt className="font-semibold text-muted">{k}</dt>
+                              <dd className="min-w-0 break-words text-fg-2">{v}</dd>
+                            </React.Fragment>
+                          ))}
+                        </dl>
+                      </div>
+                    ))}
                   </div>
                   {paisDistinto && (
                     <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-warning">
