@@ -98,7 +98,10 @@ const db = getFirestore(app);
 //  v53.15 correo con diseño M1 (corporativo sobrio): tarjeta blanca en tabla (sin franjas
 //         en Outlook), encabezado azul marino, líneas horizontales y total destacado
 //  v53.16 Observaciones debajo de las fichas Consignee / Notify
-const APP_VERSION = "v53.16";
+//  v54.0 NADA SE GUARDA HASTA ENVIAR: los pedidos viven en pantalla y la base se
+//        escribe solo al enviar, en un lote atómico (crear, modificar y eliminar).
+//        Cada apertura parte en blanco; aviso del navegador al cerrar con cambios.
+const APP_VERSION = "v54.0";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -276,7 +279,6 @@ const App = () => {
   const presenceUnsubscribeRef = useRef(null);
 
   // ─── FOB/FOT GLOBAL: cola de escrituras y secuencia de selección ─────────────
-  const incotermWriteQueueRef = useRef(Promise.resolve());
   const incotermSeqRef = useRef(0);
 
   // ── v51.1: copia de cada header tal como se cargó desde Firestore (por id).
@@ -326,8 +328,7 @@ const App = () => {
   // v52: avisos, confirmaciones y estados de trabajo en curso
   const [toastsEl, notify] = useToasts();
   const [confirmEl, askConfirm] = useConfirm();
-  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
-  const lastSaveErrorToastRef = useRef(0);
+  const [saveState, setSaveState] = useState("idle"); // idle | local | saving | saved | error
   const [isSending, setIsSending] = useState(false);
   const sendingRef = useRef(false);
   const [isPreviewing, setIsPreviewing] = useState(false);
@@ -338,6 +339,8 @@ const App = () => {
   const [showRowHelp, setShowRowHelp] = useState(false); // v52.2: ayuda de acciones de fila
   // v53.2: Exporta anterior por pedido, para restaurarlo al desactivar Directo
   const prevExportaRef = useRef({});
+  // v54.0: pedidos ya enviados que el usuario eliminó; se aplican al reenviar
+  const pendingDeletesRef = useRef(new Set());
   // v53.8: el menú de puertos se cierra con Esc, clic fuera o al cambiar de pedido
   useEffect(() => {
     if (!directoMenuOpen) return;
@@ -886,91 +889,13 @@ const App = () => {
     "preciosFOB",
   ];
 
-  // v52: envoltorio con indicador "Guardando… / Guardado" y aviso si falla.
-  // Sigue relanzando el error para que los llamadores mantengan su flujo.
+  // v54.0: NADA SE GUARDA HASTA ENVIAR. Los pedidos (nuevos o recuperados por
+  // Mail ID) viven solo en pantalla; la base se escribe únicamente en
+  // performSendEmail, en un lote atómico. Esta función queda como punto único
+  // que antes persistía en caliente: ahora solo marca que hay cambios sin enviar.
   const saveOrderToFirestore = async (orderToSave) => {
-    if (!db || !userId) return;
-    if (orderToSave.rowAction && !orderToSave.id) return;
-    setSaveState("saving");
-    try {
-      // v52.1: si el servidor no confirma en 15 s, se informa (antes quedaba colgado)
-      let timer;
-      const timeout = new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          const e = new Error("El servidor no confirmó el guardado en 15 s.");
-          e.code = "timeout";
-          reject(e);
-        }, 15000);
-      });
-      try {
-        await Promise.race([saveOrderToFirestoreRaw(orderToSave), timeout]);
-      } finally {
-        clearTimeout(timer);
-      }
-      if (isMountedRef.current) {
-        setSaveState("saved");
-        setConnError(null);
-      }
-    } catch (error) {
-      recordError("GUARDAR", error);
-      if (isMountedRef.current) setSaveState("error");
-      if (Date.now() - lastSaveErrorToastRef.current > 8000) {
-        lastSaveErrorToastRef.current = Date.now();
-        notify("error", "No se pudieron guardar los últimos cambios. Revisa tu conexión e inténtalo de nuevo.");
-      }
-      throw error;
-    }
-  };
-
-  const saveOrderToFirestoreRaw = async (orderToSave) => {
-    if (!db || !userId) {
-      return;
-    }
-    try {
-      const ordersCollectionRef = collection(
-        db,
-        `artifacts/${appId}/public/data/pedidos`
-      );
-      const { header, items } = orderToSave;
-      // ── v51.4: las acciones de fila (agregar/eliminar/reordenar/cancelar/observación)
-      // llaman aquí con rowAction. Sin pedido activo no hay nada que guardar (antes se
-      // generaba un id nuevo y updateDoc fallaba). Y si el pedido activo es un "sent"
-      // recuperado por Mail ID, solo se guardan los items: el header se persiste al
-      // enviar (SENT MODE GUARD), no en caliente con valores a medio editar.
-      if (orderToSave.rowAction && !orderToSave.id) return;
-      const itemsOnly =
-        !!orderToSave.rowAction &&
-        !!committedSearchTermRef.current &&
-        header?.status === "sent";
-      const orderDocId = orderToSave.id || doc(ordersCollectionRef).id;
-      const orderDocRef = doc(ordersCollectionRef, orderDocId);
-
-      if (orderToSave.isNew) {
-        await setDoc(orderDocRef, {
-          header: {
-            ...header,
-            lastModifiedBy: userId,
-            updatedAt: Date.now(),
-          },
-          items: JSON.stringify(items),
-        });
-      } else {
-        const updatePayload = { items: JSON.stringify(items) };
-        const skipFields = new Set(["createdBy", "createdAt"]);
-        if (!itemsOnly) {
-          Object.entries(header).forEach(([key, value]) => {
-            if (!skipFields.has(key)) {
-              updatePayload[`header.${key}`] = value;
-            }
-          });
-        }
-        updatePayload["header.lastModifiedBy"] = userId;
-        updatePayload["header.updatedAt"] = Date.now();
-        await updateDoc(orderDocRef, updatePayload);
-      }
-    } catch (error) {
-      throw error;
-    }
+    if (orderToSave?.rowAction && !orderToSave.id) return;
+    if (isMountedRef.current) setSaveState("local");
   };
 
   const handleSoftDeleteOrderInFirestore = async (orderDocIdToDelete) => {
@@ -991,6 +916,14 @@ const App = () => {
     } catch (error) {
     }
   };
+
+  // v54.0: si hay cambios sin enviar, el navegador pide confirmación al cerrar o recargar
+  useEffect(() => {
+    if (saveState !== "local" && saveState !== "error") return;
+    const avisar = (e) => { e.preventDefault(); e.returnValue = ""; return ""; };
+    window.addEventListener("beforeunload", avisar);
+    return () => window.removeEventListener("beforeunload", avisar);
+  }, [saveState]);
 
   // ─── PRESENCE HELPERS ───────────────────────────────────────────────────────
 
@@ -1177,6 +1110,7 @@ const App = () => {
 
   const loadMyDrafts = async ({ silent = false } = {}) => {
     if (!db || !userId) return;
+    pendingDeletesRef.current = new Set();
     if (!silent) setIsLoading(true);
     try {
       const ordersCollectionRef = collection(db, `artifacts/${appId}/public/data/pedidos`);
@@ -1210,7 +1144,8 @@ const App = () => {
           updatedAt: Date.now(),
         };
         const newItems = [{ ...initialItemState, id: crypto.randomUUID() }];
-        await saveOrderToFirestore({ id: newRef.id, isNew: true, header: newHeader, items: newItems });
+        // v54.0: el pedido en blanco vive solo en pantalla hasta enviarlo
+        setSaveState("idle");
         if (!isMountedRef.current) return;
         const newDraft = { id: newRef.id, header: newHeader, items: newItems };
         setDisplayedOrders([newDraft]);
@@ -1329,7 +1264,8 @@ const App = () => {
           updatedAt: Date.now(),
         };
         const newItems = [{ ...initialItemState, id: crypto.randomUUID() }];
-        await saveOrderToFirestore({ id: newRef.id, isNew: true, header: newHeader, items: newItems });
+        // v54.0: el pedido en blanco vive solo en pantalla hasta enviarlo
+        setSaveState("idle");
         if (!isMountedRef.current) return;
         const newDraft = { id: newRef.id, header: newHeader, items: newItems };
         setDisplayedOrders([newDraft]);
@@ -1375,18 +1311,15 @@ const App = () => {
       prev.map((o) => (o.id === activeOrderIdRef.current ? { ...o, ...currentOrderData } : o))
     );
 
-    // ── SENT MODE GUARD: mientras el usuario navega/visualiza un pedido sent
-    // recuperado por Mail ID, el autosave por blur NO escribe el header a
-    // Firestore en caliente — evita pisar datos con valores parciales.
-    const activeOrderStatus = displayedOrders.find(
-      (o) => o.id === activeOrderIdRef.current
-    )?.header?.status;
-    const isViewingSearchedMail = !!committedSearchTermRef.current;
-
-    if (isViewingSearchedMail && activeOrderStatus === "sent") {
+    // v54.0: nada se escribe en caliente; solo se marca "sin enviar" si hubo cambios
+    const previo = displayedOrders.find((o) => o.id === activeOrderIdRef.current);
+    if (
+      previo &&
+      JSON.stringify(previo.header) === JSON.stringify(currentOrderData.header) &&
+      JSON.stringify(previo.items) === JSON.stringify(currentOrderData.items)
+    ) {
       return;
     }
-
     await saveOrderToFirestore(currentOrderData);
   };
 
@@ -1485,49 +1418,9 @@ const App = () => {
       )
     );
 
-    if (!db || !userId) return;
-
-    // 2) Persistencia. Los "sent" no se escriben en caliente (SENT MODE GUARD):
-    //    se persisten al enviar (ver performSendEmail). Solo se escriben los borradores.
-    const draftIds = prevDisplayed
-      .filter((o) => o.id && o.header?.status === "draft")
-      .map((o) => o.id);
-    if (draftIds.length === 0) return;
-
-    // Cola: las escrituras salen en orden y la última selección es la que queda.
-    const run = incotermWriteQueueRef.current.then(async () => {
-      const batch = writeBatch(db);
-      draftIds.forEach((id) => {
-        batch.update(
-          doc(db, `artifacts/${appId}/public/data/pedidos`, id),
-          { "header.incoterm": term }          // únicamente este campo
-        );
-      });
-      await batch.commit();                      // atómico: todo o nada
-    });
-    incotermWriteQueueRef.current = run.catch(() => {});
-
-    try {
-      await run;
-    } catch (error) {
-      console.error("[FRUTAM:INCOTERM] Error al guardar", error);
-      // Solo revierte si no hubo una selección más reciente
-      if (mySeq === incotermSeqRef.current && isMountedRef.current) {
-        const prevById = Object.fromEntries(
-          prevDisplayed.map((o) => [o.id, o.id === activeId ? prevTerm : (o.header?.incoterm || "FOB")])
-        );
-        headerInfoRef.current = { ...headerInfoRef.current, incoterm: prevTerm };
-        setHeaderInfo((prev) => ({ ...prev, incoterm: prevTerm }));
-        setDisplayedOrders((prev) =>
-          prev.map((o) =>
-            prevById[o.id] !== undefined
-              ? { ...o, header: { ...o.header, incoterm: prevById[o.id] } }
-              : o
-          )
-        );
-        notify("error", "No se pudo actualizar el Incoterm en todos los pedidos. Se restauró el valor anterior; inténtalo de nuevo.");
-      }
-    }
+    // v54.0: se guarda al enviar (performSendEmail aplica el Incoterm a todos).
+    void prevDisplayed; void activeId; void mySeq; void prevTerm;
+    if (isMountedRef.current) setSaveState("local");
   };
 
   // ── v53.7 PROVEEDOR GLOBAL: el proveedor es uno por Mail ID (los pedidos 2+ lo
@@ -1564,29 +1457,8 @@ const App = () => {
     );
     notify("info", `Proveedor actualizado a ${prov} en ${ids.length === 1 ? "el otro pedido" : `los otros ${ids.length} pedidos`} de este Mail ID.`);
 
-    if (!db || !userId) return;
-    // Igual que FOB/FOT: los "sent" se persisten al enviar (SENT MODE GUARD);
-    // los borradores se escriben ahora, en un lote atómico y solo con estos campos.
-    const draftIds = ids.filter((id) => displayedOrders.find((o) => o.id === id)?.header?.status === "draft");
-    if (draftIds.length === 0) return;
-    try {
-      const batch = writeBatch(db);
-      draftIds.forEach((id) => {
-        const pt = patches[id];
-        batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, id), {
-          "header.reDestinatarios": pt.reDestinatarios,
-          "header.emailSubject": pt.emailSubject,
-          "header.exporta": pt.exporta,
-          "header.lastModifiedBy": userId,
-          "header.updatedAt": Date.now(),
-        });
-      });
-      await batch.commit();
-    } catch (error) {
-      console.error("[FRUTAM:PROVEEDOR] Error al guardar", error);
-      recordError("PROVEEDOR", error);
-      notify("error", "No se pudo guardar el proveedor en los otros pedidos. Se aplicará igualmente al enviar; revisa la conexión.");
-    }
+    // v54.0: se guarda al enviar (performSendEmail armoniza el proveedor).
+    if (isMountedRef.current) setSaveState("local");
   };
 
   // ── v20 ARCHITECTURE: The v19 fix introduced pendingItemsRef/pendingHeaderRef
@@ -2190,7 +2062,11 @@ ${directoBlock}
       if (displayedOrders.length <= 1) return;
 
       const orderIdToSoftDelete = displayedOrders[currentOrderIndex].id;
-      await handleSoftDeleteOrderInFirestore(orderIdToSoftDelete);
+      // v54.0: un pedido ya enviado se marca "eliminado" en la base al reenviar;
+      // uno que nunca se envió solo existe en pantalla y se descarta.
+      if (displayedOrders[currentOrderIndex].header?.status === "sent") {
+        pendingDeletesRef.current.add(orderIdToSoftDelete);
+      }
 
       const updated = displayedOrders.filter((o) => o.id !== orderIdToSoftDelete);
       setDisplayedOrders(updated);
@@ -2267,8 +2143,10 @@ ${directoBlock}
     subscribeToPresence(term);
     setCommittedSearchTerm(term);
     committedSearchTermRef.current = term;
+    pendingDeletesRef.current = new Set();
 
     await searchByMailId(term);
+    if (isMountedRef.current) setSaveState("idle");
   };
 
   const handleClearSearch = async () => {
@@ -2359,94 +2237,14 @@ ${directoBlock}
         return;
       }
 
-      const ordersCollectionRef = collection(
-        db,
-        `artifacts/${appId}/public/data/pedidos`
-      );
-
-      let ordersToProcess;
-
-      if (committedSearchTermRef.current) {
-        ordersToProcess = displayedOrdersSnapshot
-          .filter((o) => o.header?.status !== "deleted")
-          .map((o) => o.id === activeOrderIdRef.current
-            ? { ...o, header: { ...latestHeader }, items: latestItems.map(i => ({ ...i })) }
-            : { ...o }
-          );
-      } else {
-        // ── DRAFT MODE: group drafts by mailId, then merge local state
-        const currentProveedor = latestHeader.reDestinatarios;
-        if (currentProveedor && mailGlobalId) {
-          const ordersToGroupQuery = query(
-            ordersCollectionRef,
-            where("header.status", "==", "draft"),
-            where("header.reDestinatarios", "==", currentProveedor)
-          );
-          const ordersToGroupSnapshot = await getDocs(ordersToGroupQuery);
-          const batch = writeBatch(db);
-          let mutationCount = 0;
-
-          ordersToGroupSnapshot.docs.forEach((docSnapshot) => {
-            const orderData = docSnapshot.data();
-            const existingMailId = orderData.header?.mailId;
-            const docCreatedBy = orderData.header?.createdBy;
-
-            if (docCreatedBy !== userId) {
-              return;
-            }
-
-            if (!existingMailId || existingMailId !== mailGlobalId) {
-              const orderRef = doc(
-                db,
-                `artifacts/${appId}/public/data/pedidos`,
-                docSnapshot.id
-              );
-              batch.update(orderRef, { "header.mailId": mailGlobalId });
-              mutationCount++;
-            }
-          });
-
-          if (mutationCount > 0) {
-            await batch.commit();
-          }
-        }
-
-        const q = query(
-          ordersCollectionRef,
-          where("header.mailId", "==", mailGlobalId)
+      // v54.0: lo que se envía es exactamente lo que está en pantalla (los
+      // borradores ya no existen en la base hasta este momento).
+      let ordersToProcess = displayedOrdersSnapshot
+        .filter((o) => o.header?.status !== "deleted" && !pendingDeletesRef.current.has(o.id))
+        .map((o) => o.id === activeOrderIdRef.current
+          ? { ...o, header: { ...latestHeader }, items: latestItems.map(i => ({ ...i })) }
+          : { ...o }
         );
-        const querySnapshot = await getDocs(q);
-
-        // v51.6: parser tolerante (un items corrupto ya no aborta el envío)
-        ordersToProcess = parseFirestoreOrders(querySnapshot.docs);
-
-        ordersToProcess = ordersToProcess.filter(
-          (order) => order.header?.status !== "deleted"
-        );
-
-        const activeOrderCurrentState = {
-          id: activeOrderId,
-          header: { ...latestHeader },
-          items: latestItems.map((item) => ({ ...item })),
-        };
-
-        const existingIndexInProcess = ordersToProcess.findIndex(
-          (o) => o.id === activeOrderId
-        );
-        if (existingIndexInProcess !== -1) {
-          if (activeOrderCurrentState.header?.status !== "deleted") {
-            ordersToProcess[existingIndexInProcess] = activeOrderCurrentState;
-          } else {
-            ordersToProcess.splice(existingIndexInProcess, 1);
-          }
-        } else if (
-          activeOrderCurrentState.id &&
-          activeOrderCurrentState.header?.mailId === mailGlobalId &&
-          activeOrderCurrentState.header?.status !== "deleted"
-        ) {
-          ordersToProcess.push(activeOrderCurrentState);
-        }
-      }
 
       ordersToProcess.sort((a, b) => {
         const dateA = a.header?.createdAt || 0;
@@ -2468,86 +2266,6 @@ ${directoBlock}
         );
       }
 
-      for (const order of ordersToProcess) {
-        const orderDocRef = doc(
-          db,
-          `artifacts/${appId}/public/data/pedidos`,
-          order.id
-        );
-        const isActiveOrder = order.id === activeOrderIdRef.current;
-
-        if (order.header?.status === "draft") {
-          // DRAFT: solo el creador puede cambiar status a sent
-          if (order.header?.createdBy && order.header.createdBy !== userId) {
-            continue;
-          }
-          const updatePayload = {
-            "header.mailId": mailGlobalId,
-            "header.status": "sent",
-            "header.incoterm": latestHeader.incoterm || "FOB",
-            "header.lastModifiedBy": userId,
-            "header.updatedAt": Date.now(),
-          };
-          if (isActiveOrder) {
-            updatePayload["items"] = JSON.stringify(latestItems);
-          } else if (order.header?.reDestinatarios) {
-            // v53.7: proveedor global (y lo que depende de él) armonizado
-            updatePayload["header.reDestinatarios"] = order.header.reDestinatarios;
-            updatePayload["header.emailSubject"] = order.header.emailSubject ?? "";
-            updatePayload["header.exporta"] = order.header.exporta ?? "";
-          }
-          await updateDoc(orderDocRef, updatePayload);
-          const idx = ordersToProcess.indexOf(order);
-          if (idx !== -1) {
-            ordersToProcess[idx] = {
-              ...order,
-              header: { ...order.header, status: "sent", mailId: mailGlobalId }
-            };
-          }
-        } else if (order.header?.status === "sent") {
-          // SENT: cualquier usuario puede persistir ediciones — no hay cambio de
-          // ownership. El guard de createdBy NO aplica aquí porque el pedido ya
-          // fue enviado y cualquier usuario del equipo puede corregir y re-enviar.
-          const updatedItems = isActiveOrder ? latestItems : order.items;
-
-          // ── FIX: cuando es el pedido activo, persistir también los campos del
-          // header que el usuario modificó. El SENT MODE GUARD bloqueó el autosave
-          // por blur, por lo que headerInfoRef quedó desactualizado — usamos
-          // latestHeader (capturado del estado React antes del primer await).
-          const updatePayload: Record<string, any> = {
-            items: JSON.stringify(updatedItems),
-            "header.incoterm": latestHeader.incoterm || "FOB",
-            "header.lastModifiedBy": userId,
-            "header.updatedAt": Date.now(),
-          };
-
-          if (isActiveOrder) {
-            const skipFields = new Set(["createdBy", "createdAt", "status"]);
-            Object.entries(latestHeader).forEach(([key, value]) => {
-              if (!skipFields.has(key)) {
-                updatePayload[`header.${key}`] = value;
-              }
-            });
-
-          } else {
-            // ── v51.1: pedido sent NO activo: además de items, persistir solo los
-            // campos de header que el usuario cambió respecto de lo cargado.
-            const baseline = loadedHeadersRef.current[order.id];
-            if (baseline) {
-              EDITABLE_HEADER_FIELDS.forEach((key) => {
-                const current = order.header?.[key] ?? "";
-                const original = baseline[key] ?? "";
-                if (current !== original) {
-                  updatePayload[`header.${key}`] = current;
-                }
-              });
-            }
-          }
-
-          await updateDoc(orderDocRef, updatePayload);
-        }
-      }
-
       if (ordersToProcess.length === 0) {
         setPreviewHtmlContent(
           '<p style="text-align: center; color: #888;">No hay pedidos activos para enviar con este ID de Mail. Todos los pedidos asociados están eliminados o no existen.</p>'
@@ -2556,6 +2274,33 @@ ${directoBlock}
         setEmailActionTriggered(false);
         return;
       }
+
+      // v54.0: ENVÍO ATÓMICO. Todo lo del Mail ID se escribe en un solo lote:
+      // pedidos nuevos (se crean ya como "sent"), pedidos enviados modificados
+      // y pedidos enviados que se eliminaron. O se guarda todo, o nada.
+      const ahora = Date.now();
+      const pedidosRef = (id) => doc(db, `artifacts/${appId}/public/data/pedidos`, id);
+      const batch = writeBatch(db);
+      ordersToProcess = ordersToProcess.map((order) => {
+        const header = { ...order.header, mailId: mailGlobalId, status: "sent", lastModifiedBy: userId, updatedAt: ahora };
+        const items = JSON.stringify(order.items || []);
+        if (order.header?.status === "sent") {
+          const payload = { items, "header.lastModifiedBy": userId, "header.updatedAt": ahora, "header.incoterm": header.incoterm || "FOB" };
+          [...EDITABLE_HEADER_FIELDS, "emailSubject"].forEach((k) => { payload[`header.${k}`] = header[k] ?? ""; });
+          batch.update(pedidosRef(order.id), payload);
+        } else {
+          header.createdBy = order.header?.createdBy || userId;
+          header.createdAt = order.header?.createdAt || ahora;
+          batch.set(pedidosRef(order.id), { header, items });
+        }
+        return { ...order, header };
+      });
+      pendingDeletesRef.current.forEach((id) => {
+        batch.update(pedidosRef(id), { "header.status": "deleted", "header.lastModifiedBy": userId, "header.updatedAt": ahora });
+      });
+      await batch.commit();
+      pendingDeletesRef.current = new Set();
+
 
       let innerEmailContentHtml = "";
       const allProveedores = new Set();
@@ -2640,8 +2385,12 @@ ${directoBlock}
       });
 
       await loadMyDrafts({ silent: true });
+      if (isMountedRef.current) setSaveState("idle");
     } catch (error) {
-      notify("error", "No se pudo completar el envío. Ningún dato se perdió: revisa tu conexión e inténtalo de nuevo.", 8000);
+      // v54.0: el lote es atómico → no quedó nada a medias; lo de pantalla sigue intacto
+      recordError("ENVIAR", error);
+      if (isMountedRef.current) setSaveState("error");
+      notify("error", "No se pudo completar el envío. Nada se guardó a medias y lo que tienes en pantalla sigue intacto: revisa tu conexión e inténtalo de nuevo.", 8000);
     }
   };
 
@@ -2689,93 +2438,13 @@ ${directoBlock}
       return;
     }
 
-    let ordersForPreview;
-
-    if (committedSearchTermRef.current) {
-      // ── SENT MODE: use displayedOrdersSnapshot (captured before awaits) — never stale.
-      ordersForPreview = displayedOrdersSnapshot
-        .filter((o) => o.header?.status !== "deleted")
-        .map((o) => o.id === activeOrderIdRef.current
-          ? { ...o, header: { ...latestHeader }, items: latestItems.map(i => ({ ...i })) }
-          : { ...o }
-        );
-    } else {
-      // ── DRAFT MODE: query Firestore to group drafts by mailId, then merge local state
-      const ordersCollectionRef = collection(
-        db,
-        `artifacts/${appId}/public/data/pedidos`
+    // v54.0: la previsualización muestra lo que está en pantalla
+    let ordersForPreview = displayedOrdersSnapshot
+      .filter((o) => o.header?.status !== "deleted" && !pendingDeletesRef.current.has(o.id))
+      .map((o) => o.id === activeOrderIdRef.current
+        ? { ...o, header: { ...latestHeader }, items: latestItems.map(i => ({ ...i })) }
+        : { ...o }
       );
-
-      const currentProveedor = latestHeader.reDestinatarios;
-      if (currentProveedor && previewGlobalId) {
-        const ordersToGroupQuery = query(
-          ordersCollectionRef,
-          where("header.status", "==", "draft"),
-          where("header.reDestinatarios", "==", currentProveedor)
-        );
-        const ordersToGroupSnapshot = await getDocs(ordersToGroupQuery);
-        const batch = writeBatch(db);
-        let mutationCount = 0;
-
-        ordersToGroupSnapshot.docs.forEach((docSnapshot) => {
-          const orderData = docSnapshot.data();
-          const existingMailId = orderData.header?.mailId;
-          const docCreatedBy = orderData.header?.createdBy;
-
-          if (docCreatedBy !== userId) return;
-
-          if (!existingMailId || existingMailId !== previewGlobalId) {
-            const orderRef = doc(
-              db,
-              `artifacts/${appId}/public/data/pedidos`,
-              docSnapshot.id
-            );
-            batch.update(orderRef, { "header.mailId": previewGlobalId });
-            mutationCount++;
-          }
-        });
-
-        if (mutationCount > 0) {
-          await batch.commit();
-        }
-      }
-
-      const q = query(
-        ordersCollectionRef,
-        where("header.mailId", "==", previewGlobalId)
-      );
-      const querySnapshot = await getDocs(q);
-
-      // v51.6: parser tolerante (un items corrupto ya no aborta la previsualización)
-      ordersForPreview = parseFirestoreOrders(querySnapshot.docs);
-
-      ordersForPreview = ordersForPreview.filter(
-        (order) => order.header?.status !== "deleted"
-      );
-
-      const activeOrderCurrentState = {
-        id: activeOrderId,
-        header: { ...latestHeader },
-        items: latestItems.map((item) => ({ ...item })),
-      };
-
-      const existingIndex = ordersForPreview.findIndex(
-        (o) => o.id === activeOrderId
-      );
-      if (existingIndex !== -1) {
-        if (activeOrderCurrentState.header?.status !== "deleted") {
-          ordersForPreview[existingIndex] = activeOrderCurrentState;
-        } else {
-          ordersForPreview.splice(existingIndex, 1);
-        }
-      } else if (
-        activeOrderCurrentState.id &&
-        activeOrderCurrentState.header?.mailId === previewGlobalId &&
-        activeOrderCurrentState.header?.status !== "deleted"
-      ) {
-        ordersForPreview.push(activeOrderCurrentState);
-      }
-    }
 
     ordersForPreview.sort((a, b) => {
       const dateA = a.header?.createdAt || 0;
@@ -3232,7 +2901,9 @@ ${directoBlock}
     saveState === "saving" ? (
       <span className="inline-flex items-center gap-1.5 text-xs text-muted"><Spinner className="h-3.5 w-3.5" />Guardando…</span>
     ) : saveState === "error" ? (
-      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-danger"><Icon name="warning" className="h-4 w-4" />Sin guardar</span>
+      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-danger"><Icon name="warning" className="h-4 w-4" />No se pudo enviar</span>
+    ) : saveState === "local" ? (
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted" title="Los cambios se guardan en la base al enviar el correo"><Icon name="clock" className="h-4 w-4" />Sin enviar · se guarda al enviar</span>
     ) : saveState === "saved" ? (
       <span className="inline-flex items-center gap-1.5 text-xs text-success"><Icon name="check" className="h-4 w-4" />Guardado</span>
     ) : null;

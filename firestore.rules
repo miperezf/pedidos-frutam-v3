@@ -49,7 +49,7 @@ service cloud.firestore {
         && h.keys().hasOnly(editableHeaderKeys().concat(['createdBy', 'createdAt']))
         && h.createdBy == request.auth.uid
         && h.lastModifiedBy == request.auth.uid
-        && h.status == 'draft'
+        && h.status in ['draft', 'sent']   // v54.0: los pedidos se crean al enviar
         && validHeader(h, h.keys())
         && itemsOk(d.keys());
     }
