@@ -101,7 +101,8 @@ const db = getFirestore(app);
 //  v54.0 NADA SE GUARDA HASTA ENVIAR: los pedidos viven en pantalla y la base se
 //        escribe solo al enviar, en un lote atómico (crear, modificar y eliminar).
 //        Cada apertura parte en blanco; aviso del navegador al cerrar con cambios.
-const APP_VERSION = "v54.0";
+//  v54.1 el envío limpia campos vacíos (undefined) antes de crear los pedidos
+const APP_VERSION = "v54.1";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -341,6 +342,8 @@ const App = () => {
   const prevExportaRef = useRef({});
   // v54.0: pedidos ya enviados que el usuario eliminó; se aplican al reenviar
   const pendingDeletesRef = useRef(new Set());
+  // v54.1: true mientras se abre el cliente de correo (mailto no es "salir del sitio")
+  const suppressUnloadRef = useRef(false);
   // v53.8: el menú de puertos se cierra con Esc, clic fuera o al cambiar de pedido
   useEffect(() => {
     if (!directoMenuOpen) return;
@@ -500,6 +503,10 @@ const App = () => {
   };
 
   const openEmailClient = (subject) => {
+    // v54.1: abrir Outlook (mailto) hace que el navegador dispare "beforeunload".
+    // El envío ya quedó guardado, así que el aviso de salida se suspende un momento.
+    suppressUnloadRef.current = true;
+    setTimeout(() => { suppressUnloadRef.current = false; }, 3000);
     const outlookWebUrl = `https://outlook.office.com/mail/deeplink/compose?subject=${encodeURIComponent(subject)}`;
     const mailtoUrl = `mailto:?subject=${encodeURIComponent(subject)}&body=`;
 
@@ -920,7 +927,11 @@ const App = () => {
   // v54.0: si hay cambios sin enviar, el navegador pide confirmación al cerrar o recargar
   useEffect(() => {
     if (saveState !== "local" && saveState !== "error") return;
-    const avisar = (e) => { e.preventDefault(); e.returnValue = ""; return ""; };
+    const avisar = (e) => {
+      // abriendo el cliente de correo (mailto): se omite solo ese aviso, una vez
+      if (suppressUnloadRef.current) { suppressUnloadRef.current = false; return; }
+      e.preventDefault(); e.returnValue = ""; return "";
+    };
     window.addEventListener("beforeunload", avisar);
     return () => window.removeEventListener("beforeunload", avisar);
   }, [saveState]);
@@ -2291,7 +2302,8 @@ ${directoBlock}
         } else {
           header.createdBy = order.header?.createdBy || userId;
           header.createdAt = order.header?.createdAt || ahora;
-          batch.set(pedidosRef(order.id), { header, items });
+          // Firestore rechaza campos undefined: se limpian antes de crear el documento
+          batch.set(pedidosRef(order.id), { header: JSON.parse(JSON.stringify(header)), items });
         }
         return { ...order, header };
       });
