@@ -102,7 +102,7 @@ const db = getFirestore(app);
 //        escribe solo al enviar, en un lote atómico (crear, modificar y eliminar).
 //        Cada apertura parte en blanco; aviso del navegador al cerrar con cambios.
 //  v54.1 el envío limpia campos vacíos (undefined) antes de crear los pedidos
-const APP_VERSION = "v54.1";
+const APP_VERSION = "v54.2";
 const APP_VERSION_DATE = "21 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -591,9 +591,7 @@ const App = () => {
 
       ordersToProcess.forEach((order, index) => {
         innerEmailContentHtml += `
-            <div style="margin-bottom:8px;margin-left:16px;">
-              <h3 style="margin:0 0 6px 0;font-size:16px;color:#1d4ed8;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
-            </div>
+            ${tituloPedidoHtml(index + 1)}
             ${generateSingleOrderHtml(order.header, order.items, index + 1, maxWidth)}
         `;
         if (order.header.reDestinatarios) allProveedores.add(order.header.reDestinatarios);
@@ -613,11 +611,8 @@ const App = () => {
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Detalle de Pedido</title>
 </head>
-<body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
-  <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${escapeHtml(mailId)}</div>
-  <div>
-    ${innerEmailContentHtml}
-  </div>
+<body style="margin:0;padding:0;">
+${cuerpoCorreoHtml(mailId, innerEmailContentHtml)}
 </body>
 </html>`;
 
@@ -1710,6 +1705,25 @@ const App = () => {
     }
   };
 
+  // v54.2: el correo se pega en Outlook y se redacta encima. Para que lo que se
+  // escribe NO herede formatos (rojo del Mail ID, título azul…) y se pueda bajar
+  // el contenido con Enter: dos líneas en blanco sin formato al inicio, Mail ID y
+  // títulos dentro de tablas (bloques cerrados) y una línea en blanco al final.
+  const LINEA_EN_BLANCO = '<p style="margin:0;"><br></p>';
+  const tituloPedidoHtml = (n) => `
+            <table width="200" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:200px;margin:0 0 6px 16px;"><tr>
+              <td width="200" style="width:200px;white-space:nowrap;font-family:Arial,sans-serif;font-size:16px;font-weight:bold;color:#1d4ed8;mso-color-alt:#1d4ed8;padding:0;">Pedido #${n}</td>
+            </tr></table>`;
+  const cuerpoCorreoHtml = (mailId, contenido) => `${LINEA_EN_BLANCO}
+${LINEA_EN_BLANCO}
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;margin:0 0 12px 0;"><tr>
+  <td align="right" style="text-align:right;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;mso-color-alt:#ef4444;padding:0 16px 0 0;">Mail ID: ${escapeHtml(mailId)}</td>
+</tr></table>
+<div>
+  ${contenido}
+</div>
+${LINEA_EN_BLANCO}`;
+
   const escapeHtml = (str) => {
     if (str === null || str === undefined) return "";
     return String(str)
@@ -2323,9 +2337,7 @@ ${directoBlock}
 
       ordersToProcess.forEach((order, index) => {
         innerEmailContentHtml += `
-            <div style="margin-bottom:8px;margin-left:16px;">
-              <h3 style="margin:0 0 6px 0;font-size:16px;color:#1d4ed8;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
-            </div>
+            ${tituloPedidoHtml(index + 1)}
             ${generateSingleOrderHtml(order.header, order.items, index + 1, maxWidth)}
         `;
 
@@ -2349,11 +2361,8 @@ ${directoBlock}
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Detalle de Pedido</title>
 </head>
-<body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
-  <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${escapeHtml(mailGlobalId)}</div>
-  <div>
-    ${innerEmailContentHtml}
-  </div>
+<body style="margin:0;padding:0;">
+${cuerpoCorreoHtml(mailGlobalId, innerEmailContentHtml)}
 </body>
 </html>`;
 
@@ -2490,9 +2499,7 @@ ${directoBlock}
 
       ordersForPreview.forEach((order, index) => {
         innerPreviewHtml += `
-            <div style="margin-bottom:8px;margin-left:16px;">
-              <h3 style="margin:0 0 6px 0;font-size:16px;color:#1d4ed8;font-family:Arial,sans-serif;">Pedido #${index + 1}</h3>
-            </div>
+            ${tituloPedidoHtml(index + 1)}
             ${generateSingleOrderHtml(order.header, order.items, index + 1, maxWidth)}
         `;
       });
@@ -2505,10 +2512,7 @@ ${directoBlock}
   <title>Previsualización de Pedido</title>
 </head>
 <body style="margin:0;padding:16px 16px 16px 16px;background-color:#f8f8f8;font-family:Arial,sans-serif;">
-  <div style="width:100%;text-align:right;margin-bottom:12px;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;color:#ef4444;">Mail ID: ${escapeHtml(previewGlobalId)}</div>
-  <div>
-    ${innerPreviewHtml}
-  </div>
+${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
 </body>
 </html>`;
       setPreviewHtmlContent(finalPreviewHtml);
