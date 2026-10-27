@@ -3,7 +3,7 @@ import { Icon, Spinner, Button, IconButton, Badge, Modal, useConfirm, useToasts 
 import { detectarDirecto, exportaDirecto, oficinasDePais, datosFicha, fichasOficina, normalizarTexto } from "./oficinas";
 import {
   ACCESS_EMAIL, CODIGO_ACTIVO, EQUIPO_ID, PantallaCodigo, esCuentaCompartida, idPresencia, etiquetaPresencia,
-  registrarEnviado, recordarUidAnterior, esEnvioDeEsteEquipo, mensajeErrorCodigo,
+  registrarEnviado, recordarUidAnterior, esEnvioDeEsteEquipo, mensajeErrorCodigo, CORREO_VALIDO,
 } from "./acceso";
 import { initializeApp } from "firebase/app";
 import { initializeAppCheck, ReCaptchaV3Provider, ReCaptchaEnterpriseProvider } from "firebase/app-check";
@@ -138,7 +138,9 @@ const db = getFirestore(app);
 //  v54.3 App Check (reCAPTCHA) opcional: se activa con VITE_RECAPTCHA_SITE_KEY
 //  v55.0 código de acceso (cuenta compartida) opcional: se activa con VITE_ACCESS_EMAIL.
 //        Presencia por equipo, historial de envíos por equipo y "Cerrar sesión"
-const APP_VERSION = "v55.0";
+//  v55.1 mensajes claros si el correo de acceso está mal configurado o el proveedor
+//        Correo/contraseña no está habilitado (antes decía "Código incorrecto")
+const APP_VERSION = "v55.1";
 const APP_VERSION_DATE = "27 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -2973,6 +2975,7 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
 
   // ── v55.0: código de acceso ─────────────────────────────────────────────
   const ingresarConCodigo = async (codigo) => {
+    if (!CORREO_VALIDO) return mensajeErrorCodigo("config/correo");
     try {
       await signInWithEmailAndPassword(auth, ACCESS_EMAIL, codigo);
       return null; // onAuthStateChanged hace el resto

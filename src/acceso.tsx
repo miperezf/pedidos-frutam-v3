@@ -10,6 +10,8 @@ import { Icon, Spinner } from "./ui";
 
 export const ACCESS_EMAIL = String(import.meta.env.VITE_ACCESS_EMAIL || "").trim().toLowerCase();
 export const CODIGO_ACTIVO = ACCESS_EMAIL !== "";
+/** El correo configurado tiene forma de correo (evita pegar "VITE_ACCESS_EMAIL = ..."). */
+export const CORREO_VALIDO = /^[^\s@=]+@[^\s@=]+\.[^\s@=]+$/.test(ACCESS_EMAIL);
 
 /** ¿El usuario de Firebase es la cuenta compartida? */
 export const esCuentaCompartida = (user: any): boolean =>
@@ -75,7 +77,11 @@ export const esEnvioDeEsteEquipo = (o: any, uid: string | null): boolean => {
 
 /** Mensaje para el usuario según el error de Firebase Auth. */
 export const mensajeErrorCodigo = (code: string): string => {
-  if (["auth/invalid-credential", "auth/wrong-password", "auth/user-not-found", "auth/invalid-login-credentials", "auth/invalid-email"].includes(code))
+  if (code === "auth/invalid-email" || code === "config/correo")
+    return "La app tiene mal configurado el correo de acceso (variable VITE_ACCESS_EMAIL: debe ser solo el correo). Avisa al responsable de la app.";
+  if (code === "auth/operation-not-allowed")
+    return "El acceso con código no está habilitado en Firebase (Authentication → Correo electrónico/contraseña). Avisa al responsable de la app.";
+  if (["auth/invalid-credential", "auth/wrong-password", "auth/user-not-found", "auth/invalid-login-credentials"].includes(code))
     return "Código incorrecto. Revisa mayúsculas y vuelve a intentarlo.";
   if (code === "auth/too-many-requests") return "Demasiados intentos seguidos. Espera unos minutos y vuelve a intentarlo.";
   if (code === "auth/network-request-failed") return "Sin conexión a internet. Revisa la red y vuelve a intentarlo.";
