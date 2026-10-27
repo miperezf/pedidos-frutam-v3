@@ -1,11 +1,17 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Icon, Spinner, Button, IconButton, Badge, Modal, useConfirm, useToasts } from "./ui";
 import { detectarDirecto, exportaDirecto, oficinasDePais, datosFicha, fichasOficina, normalizarTexto } from "./oficinas";
+import {
+  ACCESS_EMAIL, CODIGO_ACTIVO, EQUIPO_ID, PantallaCodigo, esCuentaCompartida, idPresencia, etiquetaPresencia,
+  registrarEnviado, recordarUidAnterior, esEnvioDeEsteEquipo, mensajeErrorCodigo,
+} from "./acceso";
 import { initializeApp } from "firebase/app";
 import { initializeAppCheck, ReCaptchaV3Provider, ReCaptchaEnterpriseProvider } from "firebase/app-check";
 import {
   getAuth,
   signInAnonymously,
+  signInWithEmailAndPassword,
+  signOut,
   onAuthStateChanged,
 } from "firebase/auth";
 import {
@@ -130,7 +136,9 @@ const db = getFirestore(app);
 //  v54.2 correo fácil de redactar en Outlook: líneas en blanco arriba y abajo, Mail ID y
 //        títulos en tablas (el saludo escrito no hereda su formato)
 //  v54.3 App Check (reCAPTCHA) opcional: se activa con VITE_RECAPTCHA_SITE_KEY
-const APP_VERSION = "v54.3";
+//  v55.0 código de acceso (cuenta compartida) opcional: se activa con VITE_ACCESS_EMAIL.
+//        Presencia por equipo, historial de envíos por equipo y "Cerrar sesión"
+const APP_VERSION = "v55.0";
 const APP_VERSION_DATE = "27 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -289,6 +297,8 @@ const App = () => {
   const appId = firebaseConfig.projectId;
 
   const [userId, setUserId] = useState(null);
+  // v55.0: con código de acceso activo, true mientras este equipo no haya ingresado
+  const [needsCode, setNeedsCode] = useState(false);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [allOrdersFromFirestore, setAllOrdersFromFirestore] = useState([]);
@@ -581,7 +591,7 @@ const App = () => {
     const sentOrders = allOrdersFromFirestore.filter(
       (o) =>
         o.header?.status === "sent" &&
-        o.header?.lastModifiedBy === userId
+        esEnvioDeEsteEquipo(o, userId)
     );
     const grouped = {};
     sentOrders.forEach((o) => {
@@ -680,7 +690,8 @@ ${cuerpoCorreoHtml(mailId, innerEmailContentHtml)}
     const initAuth = async () => {
       try {
         // Sign in anonymously only if not already authenticated
-        if (!auth.currentUser) {
+        // (v55.0: con código de acceso activo nunca se entra anónimo)
+        if (!CODIGO_ACTIVO && !auth.currentUser) {
           await signInAnonymously(auth);
         }
       } catch (error) {
@@ -690,6 +701,24 @@ ${cuerpoCorreoHtml(mailId, innerEmailContentHtml)}
     };
 
     unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      // v55.0: con código de acceso, solo vale la cuenta compartida. Una sesión
+      // anónima anterior se cierra (recordando su uid para el historial).
+      if (CODIGO_ACTIVO) {
+        if (esCuentaCompartida(user)) {
+          setAuthError(null);
+          setNeedsCode(false);
+          setUserId(user.uid);
+        } else {
+          if (user?.isAnonymous) {
+            recordarUidAnterior(user.uid);
+            try { await signOut(auth); } catch (_) {}
+          }
+          setUserId(null);
+          setNeedsCode(true);
+        }
+        setIsAuthReady(true);
+        return;
+      }
       if (user) {
         setAuthError(null);
         setUserId(user.uid);
@@ -966,10 +995,10 @@ ${cuerpoCorreoHtml(mailId, innerEmailContentHtml)}
     try {
       const presenceRef = doc(
         db,
-        `artifacts/${appId}/public/data/presence/${mailId}/users/${userId}`
+        `artifacts/${appId}/public/data/presence/${mailId}/users/${idPresencia(userId)}`
       );
       await setDoc(presenceRef, {
-        userId,
+        userId: idPresencia(userId),
         openedAt: Date.now(),
         expiresAt: Date.now() + 5 * 60 * 1000,
       });
@@ -982,7 +1011,7 @@ ${cuerpoCorreoHtml(mailId, innerEmailContentHtml)}
     try {
       const presenceRef = doc(
         db,
-        `artifacts/${appId}/public/data/presence/${mailId}/users/${userId}`
+        `artifacts/${appId}/public/data/presence/${mailId}/users/${idPresencia(userId)}`
       );
       await deleteDoc(presenceRef);
     } catch (error) {
@@ -1007,10 +1036,10 @@ ${cuerpoCorreoHtml(mailId, innerEmailContentHtml)}
         .map((d) => d.data())
         .filter(
           (p) =>
-            p.userId !== userId &&
+            p.userId !== idPresencia(userId) &&
             p.expiresAt > now
         )
-        .map((p) => p.userId.substring(0, 8).toUpperCase());
+        .map((p) => etiquetaPresencia(p.userId));
 
       setOtherUsersPresent(others);
     });
@@ -1029,8 +1058,8 @@ ${cuerpoCorreoHtml(mailId, innerEmailContentHtml)}
       const now = Date.now();
       const others = snapshot.docs
         .map((d) => d.data())
-        .filter((p) => p.userId !== userId && p.expiresAt > now)
-        .map((p) => p.userId.substring(0, 8).toUpperCase());
+        .filter((p) => p.userId !== idPresencia(userId) && p.expiresAt > now)
+        .map((p) => etiquetaPresencia(p.userId));
       return others;
     } catch (error) {
       return [];
@@ -1116,7 +1145,7 @@ ${cuerpoCorreoHtml(mailId, innerEmailContentHtml)}
       const snapshot = await getDocs(q);
       // Filter by userId in memory
       const sentOrders = parseFirestoreOrders(snapshot.docs).filter(
-        (o) => o.header?.lastModifiedBy === userId
+        (o) => esEnvioDeEsteEquipo(o, userId)
       );
       setAllOrdersFromFirestore([...currentDrafts, ...sentOrders]);
     } catch (err) {
@@ -1234,7 +1263,7 @@ ${cuerpoCorreoHtml(mailId, innerEmailContentHtml)}
         );
         const sentSnap = await getDocs(sentQ);
         freshSent = parseFirestoreOrders(sentSnap.docs).filter(
-          (o) => o.header?.lastModifiedBy === userId
+          (o) => esEnvioDeEsteEquipo(o, userId)
         );
       } catch (_) {
         freshSent = [];
@@ -2353,6 +2382,7 @@ ${directoBlock}
         batch.update(pedidosRef(id), { "header.status": "deleted", "header.lastModifiedBy": userId, "header.updatedAt": ahora });
       });
       await batch.commit();
+      registrarEnviado(mailGlobalId); // v55.0: historial de este equipo
       pendingDeletesRef.current = new Set();
 
 
@@ -2941,6 +2971,31 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
     if (ok) window.location.reload();
   };
 
+  // ── v55.0: código de acceso ─────────────────────────────────────────────
+  const ingresarConCodigo = async (codigo) => {
+    try {
+      await signInWithEmailAndPassword(auth, ACCESS_EMAIL, codigo);
+      return null; // onAuthStateChanged hace el resto
+    } catch (e) {
+      recordError("INGRESO", e);
+      return mensajeErrorCodigo(e?.code || "");
+    }
+  };
+
+  const cerrarSesionEquipo = async () => {
+    const ok = await askConfirm({
+      title: "¿Cerrar sesión en este equipo?",
+      message: "Se descartará lo que no hayas enviado y la app volverá a pedir el código de acceso al abrirla. Los pedidos enviados no se modifican.",
+      confirmLabel: "Cerrar sesión",
+      danger: true,
+    });
+    if (!ok) return;
+    if (presenceMailId) await clearPresence(presenceMailId);
+    try { await signOut(auth); } catch (_) {}
+    suppressUnloadRef.current = true;
+    window.location.reload();
+  };
+
   const saveIndicator =
     saveState === "saving" ? (
       <span className="inline-flex items-center gap-1.5 text-xs text-muted"><Spinner className="h-3.5 w-3.5" />Guardando…</span>
@@ -3047,7 +3102,9 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
             <Icon name="user" className="h-5 w-5" />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-fg" title={userId || undefined}>Usuario {userShort}</p>
+            <p className="truncate text-sm font-semibold text-fg" title={userId || undefined}>
+              {CODIGO_ACTIVO ? <>Equipo autorizado <span className="font-mono text-muted">· {EQUIPO_ID}</span></> : <>Usuario {userShort}</>}
+            </p>
             <p className={`flex items-center gap-1.5 text-xs ${connectionOk ? "text-success" : "text-danger"}`}>
               <span className="h-2 w-2 shrink-0 rounded-full bg-current" />
               <span className="shrink-0 whitespace-nowrap">{connectionOk ? "Conectado" : "Sin conexión"}</span>
@@ -3101,6 +3158,13 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
             hint: "Descarta los borradores sin enviar",
             onClick: () => { closeMenu(); confirmReloadSession(); },
           })}
+          {CODIGO_ACTIVO && (
+            <button type="button" onClick={() => { closeMenu(); cerrarSesionEquipo(); }}
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-danger transition-colors hover:bg-danger-soft">
+              <Icon name="logout" className="h-[18px] w-[18px] shrink-0" />
+              <span className="min-w-0 flex-1">Cerrar sesión en este equipo<span className="block text-xs font-normal text-muted">Volverá a pedir el código al abrir la app</span></span>
+            </button>
+          )}
         </section>
       </div>
     </Modal>
@@ -3111,6 +3175,11 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
       Entorno de {ENV_LABEL.toLowerCase()} · base de datos: <span className="font-mono">{firebaseConfig.projectId || "sin configurar"}</span> · no usar para pedidos reales
     </div>
   ) : null;
+
+  // ── v55.0: pantalla de código de acceso (solo si VITE_ACCESS_EMAIL está configurado)
+  if (CODIGO_ACTIVO && needsCode) {
+    return <>{confirmEl}<PantallaCodigo banner={envBanner} onIngresar={ingresarConCodigo} /></>;
+  }
 
   // ── Pantalla de carga (misma geometría que la interfaz real: sin saltos) ──
   if (isLoading) {

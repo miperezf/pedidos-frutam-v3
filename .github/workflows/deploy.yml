@@ -51,6 +51,8 @@ jobs:
           # App Check (opcional): clave de sitio reCAPTCHA y proveedor ("enterprise" o vacío = v3)
           VITE_RECAPTCHA_SITE_KEY: ${{ secrets.VITE_RECAPTCHA_SITE_KEY || vars.VITE_RECAPTCHA_SITE_KEY }}
           VITE_APPCHECK_PROVIDER: ${{ secrets.VITE_APPCHECK_PROVIDER || vars.VITE_APPCHECK_PROVIDER }}
+          # Código de acceso (opcional): correo de la cuenta compartida de Firebase
+          VITE_ACCESS_EMAIL: ${{ secrets.VITE_ACCESS_EMAIL || vars.VITE_ACCESS_EMAIL }}
         run: npm run build
 
       - name: Deploy to gh-pages
