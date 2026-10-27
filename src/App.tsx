@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Icon, Spinner, Button, IconButton, Badge, Modal, useConfirm, useToasts } from "./ui";
 import { detectarDirecto, exportaDirecto, oficinasDePais, datosFicha, fichasOficina, normalizarTexto } from "./oficinas";
 import { initializeApp } from "firebase/app";
+import { initializeAppCheck, ReCaptchaV3Provider, ReCaptchaEnterpriseProvider } from "firebase/app-check";
 import {
   getAuth,
   signInAnonymously,
@@ -32,6 +33,30 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
+
+// ── APP CHECK (v54.3) ────────────────────────────────────────────────────────
+// Certifica ante Firebase que las peticiones vienen de ESTA página publicada y no
+// de un script externo que haya copiado la configuración. Se activa solo si existe
+// la variable VITE_RECAPTCHA_SITE_KEY (GitHub → Settings → Variables); sin ella la
+// app funciona igual que antes. Mientras en la consola de Firebase App Check esté en
+// "Supervisar" (sin aplicar), un fallo aquí nunca bloquea la app: solo se registra.
+// VITE_APPCHECK_PROVIDER = "enterprise" usa reCAPTCHA Enterprise; vacío = reCAPTCHA v3.
+const RECAPTCHA_SITE_KEY = import.meta.env.VITE_RECAPTCHA_SITE_KEY || "";
+let appCheckActivo = false;
+if (RECAPTCHA_SITE_KEY) {
+  try {
+    if (import.meta.env.DEV) (self as any).FIREBASE_APPCHECK_DEBUG_TOKEN = true; // localhost: token de depuración
+    const provider =
+      import.meta.env.VITE_APPCHECK_PROVIDER === "enterprise"
+        ? new ReCaptchaEnterpriseProvider(RECAPTCHA_SITE_KEY)
+        : new ReCaptchaV3Provider(RECAPTCHA_SITE_KEY);
+    initializeAppCheck(app, { provider, isTokenAutoRefreshEnabled: true });
+    appCheckActivo = true;
+  } catch (e) {
+    console.warn("[AppCheck] no se pudo iniciar:", e);
+  }
+}
+
 const auth = getAuth(app);
 const db = getFirestore(app);
 
@@ -102,8 +127,11 @@ const db = getFirestore(app);
 //        escribe solo al enviar, en un lote atómico (crear, modificar y eliminar).
 //        Cada apertura parte en blanco; aviso del navegador al cerrar con cambios.
 //  v54.1 el envío limpia campos vacíos (undefined) antes de crear los pedidos
-const APP_VERSION = "v54.2";
-const APP_VERSION_DATE = "21 Oct 2026";
+//  v54.2 correo fácil de redactar en Outlook: líneas en blanco arriba y abajo, Mail ID y
+//        títulos en tablas (el saludo escrito no hereda su formato)
+//  v54.3 App Check (reCAPTCHA) opcional: se activa con VITE_RECAPTCHA_SITE_KEY
+const APP_VERSION = "v54.3";
+const APP_VERSION_DATE = "27 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
 // v51.7: etiqueta de entorno inyectada por vite.config.ts ("" en producción)
@@ -3748,7 +3776,7 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
         )}
 
         <footer className="pt-2 pb-2 text-center text-xs text-subtle">
-          {APP_VERSION} · {APP_VERSION_DATE}
+          {APP_VERSION} · {APP_VERSION_DATE}{appCheckActivo ? " · App Check" : ""}
         </footer>
       </main>
 
