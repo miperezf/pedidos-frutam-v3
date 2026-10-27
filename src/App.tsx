@@ -50,6 +50,21 @@ const app = initializeApp(firebaseConfig);
 const RECAPTCHA_SITE_KEY = import.meta.env.VITE_RECAPTCHA_SITE_KEY || "";
 let appCheckActivo = false;
 if (RECAPTCHA_SITE_KEY) {
+  // v55.2: diagnóstico. El SDK solo informa "403 error"; esto escribe en la consola
+  // el motivo que entrega Google cuando el intercambio de App Check falla.
+  try {
+    const fetchOriginal = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+      const res = await fetchOriginal(...args);
+      try {
+        const url = String((args[0] as any)?.url || args[0] || "");
+        if (!res.ok && url.includes("firebaseappcheck.googleapis.com")) {
+          res.clone().text().then((t) => console.warn(`[FRUTAM:APPCHECK] ${res.status} · respuesta de Google: ${t.replace(/\s+/g, " ").slice(0, 600)}`));
+        }
+      } catch (_) {}
+      return res;
+    };
+  } catch (_) {}
   try {
     if (import.meta.env.DEV) (self as any).FIREBASE_APPCHECK_DEBUG_TOKEN = true; // localhost: token de depuración
     const provider =
@@ -140,7 +155,8 @@ const db = getFirestore(app);
 //        Presencia por equipo, historial de envíos por equipo y "Cerrar sesión"
 //  v55.1 mensajes claros si el correo de acceso está mal configurado o el proveedor
 //        Correo/contraseña no está habilitado (antes decía "Código incorrecto")
-const APP_VERSION = "v55.1";
+//  v55.2 diagnóstico: si App Check falla, la consola muestra el motivo que da Google
+const APP_VERSION = "v55.2";
 const APP_VERSION_DATE = "27 Oct 2026";
 const WHATSNEW_VERSION = "v52";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
