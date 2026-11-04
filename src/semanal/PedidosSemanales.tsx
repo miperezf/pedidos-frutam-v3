@@ -24,6 +24,8 @@ type Bloque = {
 };
 type Uso = Record<Kind, Record<string, Set<string>>>;
 
+const SIN_PERMISO = "Firebase no permite leer ni guardar Pedidos semanales en esta base. Falta publicar las reglas de esta sección (Firestore → Reglas).";
+const motivo = (e: unknown, txt: string) => ((e as { code?: string })?.code === "permission-denied" ? SIN_PERMISO : txt);
 const VACIO: Catalogo = { especies: [], mercados: [], proveedores: [] };
 const SEMANA_KEY = "frutam_semanal_semana";
 const safeGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
@@ -148,7 +150,7 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
     setPendientes((p) => p + 1);
     cola.current = cola.current.then(fn)
       .then(() => setErrorGuardar(false))
-      .catch((e) => { console.error("[FRUTAM:SEMANAL]", e); setErrorGuardar(true); notify("error", "No se pudo guardar. Revisa la conexión e inténtalo de nuevo."); })
+      .catch((e) => { console.error("[FRUTAM:SEMANAL]", e); setErrorGuardar(true); notify("error", motivo(e, "No se pudo guardar. Revisa la conexión e inténtalo de nuevo."), 8000); })
       .finally(() => setPendientes((p) => p - 1));
     return cola.current;
   }, [notify]);
@@ -159,15 +161,15 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
     const t = setTimeout(() => { if (!okC || !okS) setAviso("No se pudo conectar todavía; lo que ves puede no estar al día."); }, 10000);
     const fin = () => { if (okC && okS) { clearTimeout(t); setAviso(""); } };
     const u1 = store.subCatalogo((c) => { setCat(c); setCatOk(true); okC = true; fin(); },
-      (e) => { console.error(e); setCatOk(true); okC = true; setAviso("No se pudo leer el catálogo."); });
+      (e) => { console.error(e); setCatOk(true); okC = true; setAviso(motivo(e, "No se pudo leer el catálogo.")); });
     const u2 = store.subSemanas((s) => { setSemanas(s); setSemOk(true); okS = true; fin(); },
-      (e) => { console.error(e); setSemOk(true); okS = true; setAviso("No se pudieron leer las semanas."); });
+      (e) => { console.error(e); setSemOk(true); okS = true; setAviso(motivo(e, "No se pudieron leer las semanas.")); });
     return () => { clearTimeout(t); u1(); u2(); };
   }, [store]);
   useEffect(() => {
     setAsig([]); setAsigOk(false); safeSet(SEMANA_KEY, semana);
     return store.subAsig(semana, (a) => { setAsig(a); setAsigOk(true); },
-      (e) => { console.error(e); setAsigOk(true); setAviso("No se pudieron leer las asignaciones de esta semana."); });
+      (e) => { console.error(e); setAsigOk(true); setAviso(motivo(e, "No se pudieron leer las asignaciones de esta semana.")); });
   }, [store, semana]);
 
   // ── Modelo ──────────────────────────────────────────────────────────────────
@@ -442,7 +444,8 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
   );
 
   const cargando = !catOk || !semOk || (vista !== "ajustes" && !asigOk);
-  const sinCatalogo = catOk && !cat;
+  const sinPermiso = aviso === SIN_PERMISO;
+  const sinCatalogo = catOk && !cat && !sinPermiso;
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -451,7 +454,7 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
         {aviso && <div role="status" className="rounded-xl border border-warning-line bg-warning-soft px-4 py-3 text-sm font-semibold text-warning">{aviso}</div>}
         {cargando ? (
           <div className="space-y-3">{[0, 1].map((i) => <div key={i} className="h-40 animate-pulse rounded-2xl border border-line bg-surface" />)}</div>
-        ) : sinCatalogo ? (
+        ) : sinPermiso ? null : sinCatalogo ? (
           <section className="rounded-2xl border border-dashed border-line-strong bg-surface px-6 py-12 text-center">
             <p className="text-base font-semibold text-fg">Aún no hay catálogo de especies, mercados y proveedores.</p>
             <p className="mt-1 text-sm text-muted">Se puede cargar el de la planilla Pedidos_Semanales 2026 y luego editarlo en Ajustes.</p>

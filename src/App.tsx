@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Icon, Spinner, Button, IconButton, Badge, Modal, useConfirm, useToasts } from "./ui";
-import { SideNav, SideNavMovil, seccionDesdeHash, hashDeSeccion, type SeccionId } from "./SideNav";
+import { MenuSecciones, seccionDesdeHash, hashDeSeccion, type SeccionId } from "./SideNav";
 import PedidosSemanales from "./semanal/PedidosSemanales";
 import { firestoreStore } from "./semanal/firestore";
 import { detectarDirecto, exportaDirecto, oficinasDePais, datosFicha, fichasOficina, normalizarTexto } from "./oficinas";
@@ -160,11 +160,13 @@ const db = getFirestore(app);
 //        Correo/contraseña no está habilitado (antes decía "Código incorrecto")
 //  v55.2 diagnóstico: si App Check falla, la consola muestra el motivo que da Google
 //  v55.3 modal de novedades v55 (resume v52 → v55 para quien viene de la v51.5)
-//  v56.0 menú lateral (plegable en escritorio, panel en móvil) y nueva sección "Pedidos
+//  v56.0 menú de secciones y nueva sección "Pedidos
 //        semanales" (#/semanal): pedido por especie y mercado, asignación a proveedores,
 //        vista por proveedor y catálogo. Se guarda al momento en semanas/ y config/catalogo.
 //        Pedidos por Mail ID no cambia y su trabajo sin enviar se conserva al cambiar de sección.
-const APP_VERSION = "v56.0";
+//  v56.1 menú más sutil: botón ☰ en la barra superior (todas las pantallas), sin barra
+//        lateral fija; aviso claro si Firebase rechaza el acceso a Pedidos semanales.
+const APP_VERSION = "v56.1";
 const APP_VERSION_DATE = "4 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -394,11 +396,9 @@ const App = () => {
   const [toastsEl, notify] = useToasts();
 
   // ─── v56.0: SECCIONES Y MENÚ LATERAL ─────────────────────────────────────────
-  const NAV_KEY = "frutam_nav_plegado";
   const [seccion, setSeccion] = useState<SeccionId>(() => seccionDesdeHash());
   const [semanalAbierta, setSemanalAbierta] = useState(() => seccionDesdeHash() === "semanal");
-  const [navPlegado, setNavPlegado] = useState(() => safeStorageGet(NAV_KEY) !== "false");
-  const [menuMovil, setMenuMovil] = useState(false);
+  const [menuAbierto, setMenuAbierto] = useState(false);
   const semanalStore = React.useMemo(() => firestoreStore(db, appId), [appId]);
   useEffect(() => {
     const alCambiar = () => { const s = seccionDesdeHash(); setSeccion(s); if (s === "semanal") setSemanalAbierta(true); };
@@ -411,7 +411,6 @@ const App = () => {
     if (window.location.hash !== hashDeSeccion(id)) window.location.hash = hashDeSeccion(id);
     window.scrollTo(0, 0);
   };
-  const toggleNav = () => setNavPlegado((v) => { safeStorageSet(NAV_KEY, String(!v)); return !v; });
   const [confirmEl, askConfirm] = useConfirm();
   const [saveState, setSaveState] = useState("idle"); // idle | local | saving | saved | error
   const [isSending, setIsSending] = useState(false);
@@ -3337,7 +3336,7 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
       {/* ── BARRA SUPERIOR ─────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur">
         <div className="flex h-14 w-full items-center gap-3 px-3 sm:px-4">
-          <IconButton label="Abrir menú" icon="menu" className="md:hidden" onClick={() => setMenuMovil(true)} />
+          <IconButton label="Menú" icon="menu" onClick={() => setMenuAbierto(true)} aria-haspopup="dialog" />
           {vpcLogo}
           <div className="min-w-0 flex-1 border-l border-line pl-3">
             <h1 className="truncate text-sm font-semibold text-fg sm:text-base">Pedidos Comercial Frutam</h1>
@@ -3364,7 +3363,6 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
       </header>
 
       <div className="flex min-h-0 flex-1">
-      <SideNav activa={seccion} onChange={irASeccion} plegado={navPlegado} onTogglePlegado={toggleNav} />
       {/* v56.0: Pedidos por Mail ID queda montado (solo se oculta) para no perder trabajo sin enviar */}
       <div className={`min-w-0 flex-1 flex-col ${seccion === "pedidos" ? "flex" : "hidden"}`}>
       <main className="mx-auto w-full max-w-6xl flex-1 space-y-4 px-3 pt-4 pb-6 sm:px-6 sm:pt-6">
@@ -3927,7 +3925,7 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
         </div>
       )}
       </div>
-      <SideNavMovil open={menuMovil} onClose={() => setMenuMovil(false)} activa={seccion} onChange={irASeccion} />
+      <MenuSecciones open={menuAbierto} onClose={() => setMenuAbierto(false)} activa={seccion} onChange={irASeccion} />
 
       {/* ── MODAL: FINALIZAR / PREVISUALIZAR / ENVIAR ──────────────────────── */}
       <Modal
