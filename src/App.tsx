@@ -166,7 +166,9 @@ const db = getFirestore(app);
 //        Pedidos por Mail ID no cambia y su trabajo sin enviar se conserva al cambiar de sección.
 //  v56.1 menú más sutil: botón ☰ en la barra superior (todas las pantallas), sin barra
 //        lateral fija; aviso claro si Firebase rechaza el acceso a Pedidos semanales.
-const APP_VERSION = "v56.1";
+//  v56.2 menú lateral: el ☰ despliega un panel desde la izquierda bajo la barra superior
+//        (el botón pasa a ✕); se cierra al elegir sección, con ✕, Esc o tocando fuera.
+const APP_VERSION = "v56.2";
 const APP_VERSION_DATE = "4 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -399,6 +401,7 @@ const App = () => {
   const [seccion, setSeccion] = useState<SeccionId>(() => seccionDesdeHash());
   const [semanalAbierta, setSemanalAbierta] = useState(() => seccionDesdeHash() === "semanal");
   const [menuAbierto, setMenuAbierto] = useState(false);
+  const barraRef = useRef<HTMLElement>(null);
   const semanalStore = React.useMemo(() => firestoreStore(db, appId), [appId]);
   useEffect(() => {
     const alCambiar = () => { const s = seccionDesdeHash(); setSeccion(s); if (s === "semanal") setSemanalAbierta(true); };
@@ -3334,9 +3337,10 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
       {envBanner}
 
       {/* ── BARRA SUPERIOR ─────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur">
+      <header ref={barraRef} className="sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur">
         <div className="flex h-14 w-full items-center gap-3 px-3 sm:px-4">
-          <IconButton label="Menú" icon="menu" onClick={() => setMenuAbierto(true)} aria-haspopup="dialog" />
+          <IconButton label={menuAbierto ? "Cerrar menú" : "Menú"} icon={menuAbierto ? "x" : "menu"}
+            onClick={() => setMenuAbierto((v) => !v)} aria-expanded={menuAbierto} />
           {vpcLogo}
           <div className="min-w-0 flex-1 border-l border-line pl-3">
             <h1 className="truncate text-sm font-semibold text-fg sm:text-base">Pedidos Comercial Frutam</h1>
@@ -3925,7 +3929,7 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
         </div>
       )}
       </div>
-      <MenuSecciones open={menuAbierto} onClose={() => setMenuAbierto(false)} activa={seccion} onChange={irASeccion} />
+      <MenuSecciones open={menuAbierto} onClose={() => setMenuAbierto(false)} activa={seccion} onChange={irASeccion} anclaRef={barraRef} />
 
       {/* ── MODAL: FINALIZAR / PREVISUALIZAR / ENVIAR ──────────────────────── */}
       <Modal
