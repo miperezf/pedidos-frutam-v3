@@ -1,0 +1,762 @@
+// ── Sección "Pedidos semanales" (v56.0) ──────────────────────────────────────
+// Una hoja por semana (W01–W52). Cada especie es un bloque: fila Pedido (cajas
+// por mercado) → proveedores asignados → Falta. Vista por proveedor para enviar
+// los pedidos y Ajustes para el catálogo (mercados, especies, proveedores).
+// Todo se guarda al momento (a diferencia de los pedidos por Mail ID).
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactDOM from "react-dom";
+import { Icon, Button, IconButton, Badge, Spinner } from "../ui";
+import {
+  type Asig, type Catalogo, type Mercado, type Semana, type SemanalStore,
+  asigId, clave, currentWeek, familia, FAMILIAS, fmt, fmt0, gruposDuplicados, mismoQue, parecidos,
+  parseCajas, parseWeek, shiftWeek, weekId, weekRange, weekShort,
+} from "./datos";
+import { CATALOGO_INICIAL } from "./catalogoInicial";
+
+type Notify = (tone: string, message: React.ReactNode, ms?: number) => void;
+type Vista = "especie" | "proveedor" | "ajustes";
+type Kind = "mk" | "esp" | "prov";
+type Opt = { v: string; nuevo?: boolean; ya?: boolean; hint?: string };
+type Celda = { cajas: number; ids: string[] };
+type Bloque = {
+  esp: string; ped: Record<string, number>; filas: Record<string, Record<string, Celda>>; provs: string[];
+  pt: number; at: number; falta: Record<string, number>; ft: number; fp: number; fn: number; diff: boolean;
+};
+type Uso = Record<Kind, Record<string, Set<string>>>;
+
+const VACIO: Catalogo = { especies: [], mercados: [], proveedores: [] };
+const SEMANA_KEY = "frutam_semanal_semana";
+const safeGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
+const safeSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* sin almacenamiento */ } };
+const clonar = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
+
+// ── Celda numérica: edita local, guarda al salir ─────────────────────────────
+function CeldaInput({ value, onCommit, label, mk, fuerte }: { value: number; onCommit: (v: number) => void; label: string; mk: string; fuerte?: boolean }) {
+  const [txt, setTxt] = useState(fmt(value));
+  const foco = useRef(false);
+  const recienEnfocada = useRef(false);
+  useEffect(() => { if (!foco.current) setTxt(fmt(value)); }, [value]);
+  return (
+    <input
+      inputMode="numeric"
+      aria-label={label}
+      data-nav="cell"
+      data-mk={mk}
+      value={txt}
+      className={`cell-input scroll-mt-16 md:scroll-mt-40 scroll-mb-6 tabular-nums ${fuerte ? "font-bold text-primary" : value ? "font-semibold" : ""}`}
+      onFocus={(e) => { foco.current = true; recienEnfocada.current = true; e.currentTarget.select(); }}
+      onMouseUp={(e) => { if (recienEnfocada.current) { e.preventDefault(); recienEnfocada.current = false; } }}
+      onChange={(e) => { recienEnfocada.current = false; setTxt(e.target.value); }}
+      onKeyDown={() => { recienEnfocada.current = false; }}
+      onBlur={() => { foco.current = false; recienEnfocada.current = false; const v = parseCajas(txt); if (v !== (value || 0)) onCommit(v); setTxt(fmt(v)); }}
+    />
+  );
+}
+
+// ── Buscador con lista (agregar especie / proveedor) ─────────────────────────
+function Combo({ placeholder, getOptions, onPick, inputClassName, ariaLabel, nav, flechasSiempre }: {
+  placeholder: string; getOptions: (q: string) => Opt[]; onPick: (o: Opt) => void; inputClassName: string;
+  ariaLabel: string; nav?: string; flechasSiempre?: boolean;
+}) {
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const [idx, setIdx] = useState(0);
+  const ref = useRef<HTMLInputElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; bottom: number; width: number; up: boolean } | null>(null);
+  const opts = open ? getOptions(q) : [];
+  const ubicar = useCallback(() => {
+    const el = ref.current; if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({ left: r.left, top: r.bottom + 4, bottom: window.innerHeight - r.top + 4, width: Math.max(r.width, 280), up: window.innerHeight - r.bottom < 300 });
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    ubicar();
+    window.addEventListener("scroll", ubicar, true); window.addEventListener("resize", ubicar);
+    return () => { window.removeEventListener("scroll", ubicar, true); window.removeEventListener("resize", ubicar); };
+  }, [open, ubicar]);
+  const elegir = (o: Opt) => { setQ(""); setIdx(0); setOpen(false); onPick(o); };
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") { if (open || q) { e.preventDefault(); setQ(""); setOpen(false); } return; }
+    if (!q.trim() && !flechasSiempre) return; // vacío: las flechas navegan la grilla
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      if (!opts.length) return; e.preventDefault();
+      setIdx((i) => (i + (e.key === "ArrowDown" ? 1 : -1) + opts.length) % opts.length);
+    } else if (e.key === "Enter") {
+      e.preventDefault(); if (!q.trim()) return;
+      const o = opts[Math.min(idx, opts.length - 1)]; if (o) elegir(o);
+    }
+  };
+  return (
+    <>
+      <input
+        ref={ref} value={q} placeholder={placeholder} aria-label={ariaLabel} autoComplete="off" role="combobox"
+        aria-expanded={open && opts.length > 0} data-nav={nav} className={inputClassName}
+        onFocus={() => { setOpen(true); setIdx(0); }}
+        onBlur={() => setOpen(false)}
+        onChange={(e) => { setQ(e.target.value); setOpen(true); setIdx(0); }}
+        onKeyDown={onKey}
+      />
+      {open && opts.length > 0 && pos && ReactDOM.createPortal(
+        <div role="listbox" className="fixed z-[70] max-h-80 overflow-y-auto rounded-xl border border-line bg-surface p-1.5 shadow-2xl"
+          style={{ left: pos.left, width: pos.width, ...(pos.up ? { bottom: pos.bottom } : { top: pos.top }) }}>
+          {opts.map((o, j) => (
+            <button key={o.v + (o.nuevo ? "+" : "")} type="button" role="option" aria-selected={j === idx}
+              onMouseDown={(e) => e.preventDefault()} onClick={() => elegir(o)}
+              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm ${j === idx ? "bg-primary-soft text-primary" : "text-fg hover:bg-primary-soft hover:text-primary"}`}>
+              {o.nuevo ? <><Icon name="plus" className="h-4 w-4" strokeWidth={2.5} />Crear “{o.v}”</> : <span className="truncate">{o.v}</span>}
+              {o.hint && <span className="ml-auto shrink-0 text-xs text-muted">{o.hint}</span>}
+            </button>
+          ))}
+        </div>, document.body)}
+    </>
+  );
+}
+
+const mayusInicial = (x: string) => x.charAt(0).toLocaleUpperCase("es") + x.slice(1);
+const pill = (tone: "warning" | "danger" | "success", txt: React.ReactNode) => (
+  <span className={`inline-flex min-w-10 justify-center rounded-full px-2 py-0.5 text-xs font-semibold ${tone === "warning" ? "bg-warning-soft text-warning" : tone === "danger" ? "bg-danger-soft text-danger" : "text-success"}`}>{txt}</span>
+);
+
+// ══════════════════════════════════════════════════════════════════════════════
+export default function PedidosSemanales({ store, notify }: { store: SemanalStore; notify: Notify }) {
+  const [semana, setSemana] = useState(() => {
+    const v = safeGet(SEMANA_KEY);
+    return v && /^\d{4}-W\d{2}$/.test(v) && parseWeek(v).w <= 52 ? v : currentWeek();
+  });
+  const [vista, setVista] = useState<Vista>("especie");
+  const [cat, setCat] = useState<Catalogo | null>(null);
+  const [catOk, setCatOk] = useState(false);
+  const [semanas, setSemanas] = useState<Record<string, Semana>>({});
+  const [semOk, setSemOk] = useState(false);
+  const [asig, setAsig] = useState<Asig[]>([]);
+  const [asigOk, setAsigOk] = useState(false);
+  const [extraEsp, setExtraEsp] = useState<Record<string, string[]>>({});
+  const [extraProv, setExtraProv] = useState<Record<string, Record<string, string[]>>>({});
+  const [pendientes, setPendientes] = useState(0);
+  const [errorGuardar, setErrorGuardar] = useState(false);
+  const [aviso, setAviso] = useState("");
+  const [uso, setUso] = useState<Uso | null>(null);
+
+  const catRef = useRef(cat); catRef.current = cat;
+  const asigRef = useRef(asig); asigRef.current = asig;
+  const semanasRef = useRef(semanas); semanasRef.current = semanas;
+  const cola = useRef<Promise<unknown>>(Promise.resolve());
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  const enqueue = useCallback((fn: () => Promise<unknown>) => {
+    setPendientes((p) => p + 1);
+    cola.current = cola.current.then(fn)
+      .then(() => setErrorGuardar(false))
+      .catch((e) => { console.error("[FRUTAM:SEMANAL]", e); setErrorGuardar(true); notify("error", "No se pudo guardar. Revisa la conexión e inténtalo de nuevo."); })
+      .finally(() => setPendientes((p) => p - 1));
+    return cola.current;
+  }, [notify]);
+
+  // ── Suscripciones ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    let okC = false, okS = false;
+    const t = setTimeout(() => { if (!okC || !okS) setAviso("No se pudo conectar todavía; lo que ves puede no estar al día."); }, 10000);
+    const fin = () => { if (okC && okS) { clearTimeout(t); setAviso(""); } };
+    const u1 = store.subCatalogo((c) => { setCat(c); setCatOk(true); okC = true; fin(); },
+      (e) => { console.error(e); setCatOk(true); okC = true; setAviso("No se pudo leer el catálogo."); });
+    const u2 = store.subSemanas((s) => { setSemanas(s); setSemOk(true); okS = true; fin(); },
+      (e) => { console.error(e); setSemOk(true); okS = true; setAviso("No se pudieron leer las semanas."); });
+    return () => { clearTimeout(t); u1(); u2(); };
+  }, [store]);
+  useEffect(() => {
+    setAsig([]); setAsigOk(false); safeSet(SEMANA_KEY, semana);
+    return store.subAsig(semana, (a) => { setAsig(a); setAsigOk(true); },
+      (e) => { console.error(e); setAsigOk(true); setAviso("No se pudieron leer las asignaciones de esta semana."); });
+  }, [store, semana]);
+
+  // ── Modelo ──────────────────────────────────────────────────────────────────
+  const C = cat || VACIO;
+  const mks = C.mercados;
+  const provBy = (n: string) => C.proveedores.find((p) => p.nombre === n);
+  const eidx = (e: string) => { const i = C.especies.indexOf(e); return i < 0 ? 999 : i; };
+  const ordenar = (arr: string[]) => [...new Set(arr)].sort((a, b) => eidx(a) - eidx(b) || a.localeCompare(b));
+  const pedido = semanas[semana]?.pedido || {};
+
+  const M = useMemo(() => {
+    const ex = extraEsp[semana] || []; const xp = extraProv[semana] || {};
+    const esps = ordenar([...Object.keys(pedido).filter((e) => Object.values(pedido[e] || {}).some((v) => +v > 0)), ...asig.map((a) => a.especie), ...ex]);
+    let pedTot = 0, asgTot = 0;
+    const bloques: Bloque[] = esps.map((e) => {
+      const p = pedido[e] || {}; const filas: Bloque["filas"] = {};
+      for (const a of asig.filter((x) => x.especie === e)) {
+        const f = (filas[a.proveedor] ||= {}); const c = f[a.mercado];
+        f[a.mercado] = c ? { cajas: c.cajas + (+a.cajas || 0), ids: [...c.ids, a.id] } : { cajas: +a.cajas || 0, ids: [a.id] };
+      }
+      for (const n of xp[e] || []) filas[n] ||= {};
+      const codes = new Set([...mks.map((m) => m.code), ...Object.keys(p)]);
+      let pt = 0, at = 0; const falta: Record<string, number> = {};
+      for (const m of codes) {
+        const pv = +p[m] || 0; const av = Object.values(filas).reduce((s, r) => s + (r[m]?.cajas || 0), 0);
+        pt += pv; at += av; falta[m] = pv - av;
+      }
+      pedTot += pt; asgTot += at;
+      const fp = Object.values(falta).reduce((s, v) => s + (v > 0 ? v : 0), 0);
+      const fn = Object.values(falta).reduce((s, v) => s + (v < 0 ? -v : 0), 0);
+      return { esp: e, ped: p, filas, provs: Object.keys(filas).sort((a, b) => a.localeCompare(b)), pt, at, falta, ft: pt - at, fp, fn, diff: fp > 0 || fn > 0 };
+    });
+    return { bloques, pedTot, asgTot, falta: bloques.reduce((s, b) => s + b.fp, 0), demas: bloques.reduce((s, b) => s + b.fn, 0) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pedido, asig, extraEsp, extraProv, semana, cat]);
+
+  // ── Escrituras ──────────────────────────────────────────────────────────────
+  const saveCat = useCallback((mut: (c: Catalogo) => void) => enqueue(async () => {
+    const next = clonar(catRef.current || VACIO); mut(next);
+    catRef.current = next; setCat(next);
+    await store.setCatalogo(next);
+  }), [enqueue, store]);
+
+  const setPed = (esp: string, mk: string, v: number) => { const s = semana; enqueue(() => store.setPedidoCelda(s, esp, mk, v)); };
+  const setCeldaAsig = (esp: string, prov: string, mk: string, v: number) => {
+    const s = semana;
+    const ex = asigRef.current.filter((a) => a.especie === esp && a.proveedor === prov && a.mercado === mk);
+    enqueue(async () => {
+      if (v > 0) {
+        await store.setAsig(s, ex[0]?.id || asigId(esp, prov, mk), { proveedor: prov, especie: esp, mercado: mk, cajas: v, creado: Date.now() });
+        if (ex.length > 1) await store.borrarAsig(s, ex.slice(1).map((a) => a.id));
+      } else if (ex.length) await store.borrarAsig(s, ex.map((a) => a.id));
+      await store.tocarSemana(s);
+    });
+  };
+  const aprenderProv = (nombre: string, esp: string) => {
+    const p = provBy(nombre);
+    if (!p) saveCat((c) => { c.proveedores.push({ nombre, especies: [esp] }); c.proveedores.sort((a, b) => a.nombre.localeCompare(b.nombre)); });
+    else if (!(p.especies || []).includes(esp)) saveCat((c) => {
+      const x = c.proveedores.find((y) => y.nombre === nombre); if (!x) return;
+      x.especies = [...(x.especies || []), esp].sort((a, b) => c.especies.indexOf(a) - c.especies.indexOf(b));
+    });
+  };
+  const quitarProv = (esp: string, prov: string) => {
+    const s = semana;
+    setExtraProv((x) => { const w = { ...(x[s] || {}) }; w[esp] = (w[esp] || []).filter((n) => n !== prov); return { ...x, [s]: w }; });
+    const ids = asigRef.current.filter((a) => a.especie === esp && a.proveedor === prov).map((a) => a.id);
+    if (ids.length) enqueue(() => store.borrarAsig(s, ids));
+  };
+  const borrarEspecie = (esp: string) => {
+    const s = semana;
+    setExtraEsp((x) => ({ ...x, [s]: (x[s] || []).filter((e) => e !== esp) }));
+    setExtraProv((x) => { const w = { ...(x[s] || {}) }; delete w[esp]; return { ...x, [s]: w }; });
+    const ids = asigRef.current.filter((a) => a.especie === esp).map((a) => a.id);
+    enqueue(async () => { if (ids.length) await store.borrarAsig(s, ids); await store.borrarEspeciePedido(s, esp); })
+      .then(() => notify("success", `${esp} borrado de ${weekShort(s)}`, 2500));
+  };
+  const borrarSemana = () => {
+    const s = semana; const ids = asigRef.current.map((a) => a.id);
+    setExtraEsp((x) => ({ ...x, [s]: [] })); setExtraProv((x) => ({ ...x, [s]: {} }));
+    enqueue(async () => { if (ids.length) await store.borrarAsig(s, ids); await store.borrarSemana(s); })
+      .then(() => notify("success", `Semana ${weekShort(s)} borrada`, 2500));
+  };
+
+  // ── Renombrar / unir (se aplica en todas las semanas guardadas) ─────────────
+  const cargarUso = useCallback(async () => {
+    const u: Uso = { esp: {}, prov: {}, mk: {} };
+    const add = (k: Kind, n: string, id: string) => (u[k][n] ||= new Set()).add(id);
+    try {
+      for (const [id, w] of Object.entries(semanasRef.current)) {
+        for (const [e, r] of Object.entries(w.pedido || {})) for (const [m, v] of Object.entries(r || {})) if (+v > 0) { add("esp", e, id); add("mk", m, id); }
+        for (const a of await store.listAsig(id)) if (+a.cajas > 0) { add("esp", a.especie, id); add("prov", a.proveedor, id); add("mk", a.mercado, id); }
+      }
+      setUso(u);
+    } catch (e) { console.error(e); }
+  }, [store]);
+  useEffect(() => { if (vista === "ajustes" && semOk) cargarUso(); }, [vista, semOk, cargarUso]);
+
+  const migrar = async (kind: Kind, from: string, to: string) => {
+    const f = kind === "esp" ? "especie" : kind === "prov" ? "proveedor" : "mercado";
+    let n = 0;
+    for (const id of new Set([...Object.keys(semanasRef.current), semana])) {
+      let ch = false;
+      if (kind !== "prov") {
+        const d = await store.getSemana(id);
+        if (d?.pedido) {
+          const P = clonar(d.pedido); let pc = false;
+          if (kind === "esp" && P[from]) { const r = P[to] || {}; for (const [m, v] of Object.entries(P[from])) r[m] = (+r[m] || 0) + (+v || 0); P[to] = r; delete P[from]; pc = true; }
+          if (kind === "mk") for (const e of Object.keys(P)) { const r = P[e]; if (r && from in r) { r[to] = (+r[to] || 0) + (+r[from] || 0); delete r[from]; pc = true; } }
+          if (pc) { await store.setPedido(id, P); ch = true; }
+        }
+      }
+      const lista = await store.listAsig(id);
+      const afectadas = lista.filter((a) => (a as any)[f] === from);
+      for (const a of afectadas) await store.patchAsig(id, a.id, { [f]: to } as any);
+      if (afectadas.length) {
+        // si quedaron dos filas iguales (misma especie, proveedor y mercado), se suman
+        const vistas: Record<string, { id: string; cajas: number }> = {}; const sobran: string[] = [];
+        for (const a0 of await store.listAsig(id)) {
+          const k = `${a0.especie}|${a0.proveedor}|${a0.mercado}`;
+          if (vistas[k]) { vistas[k].cajas += +a0.cajas || 0; await store.patchAsig(id, vistas[k].id, { cajas: vistas[k].cajas }); sobran.push(a0.id); }
+          else vistas[k] = { id: a0.id, cajas: +a0.cajas || 0 };
+        }
+        if (sobran.length) await store.borrarAsig(id, sobran);
+        ch = true;
+      }
+      if (ch) n++;
+    }
+    return n;
+  };
+  const renombrar = (kind: Kind, from: string, to: string) => {
+    setAviso("Actualizando semanas guardadas…");
+    if (kind === "esp") setExtraEsp((x) => Object.fromEntries(Object.entries(x).map(([w, l]) => [w, l.map((e) => (e === from ? to : e))])));
+    enqueue(async () => { const n = await migrar(kind, from, to); setAviso(""); notify("success", `“${from}” ahora es “${to}”${n ? ` (${n} semanas actualizadas)` : ""}`); await cargarUso(); });
+  };
+  const unir = (kind: "esp" | "prov", keep: string, otros0: string[]) => {
+    const otros = otros0.filter((o) => o !== keep); if (!otros.length) return;
+    saveCat((c) => {
+      if (kind === "esp") {
+        c.especies = c.especies.filter((e) => !otros.includes(e)); if (!c.especies.includes(keep)) c.especies.push(keep);
+        for (const p of c.proveedores) p.especies = [...new Set((p.especies || []).map((e) => (otros.includes(e) ? keep : e)))];
+      } else {
+        const k = c.proveedores.find((p) => p.nombre === keep);
+        for (const o of otros) { const x = c.proveedores.find((p) => p.nombre === o); if (x && k) k.especies = [...new Set([...(k.especies || []), ...(x.especies || [])])]; }
+        c.proveedores = c.proveedores.filter((p) => !otros.includes(p.nombre));
+      }
+    });
+    setExtraProv((x) => { const y = clonar(x); for (const w of Object.values(y)) for (const e of Object.keys(w)) w[e] = [...new Set(w[e].map((n) => (otros.includes(n) ? keep : n)))]; return y; });
+    setExtraEsp((x) => Object.fromEntries(Object.entries(x).map(([w, l]) => [w, [...new Set(l.map((e) => (otros.includes(e) ? keep : e)))]])));
+    setAviso("Uniendo duplicados en las semanas guardadas…");
+    enqueue(async () => { for (const o of otros) await migrar(kind, o, keep); setAviso(""); notify("success", `${otros.map((o) => `“${o}”`).join(", ")} quedó unido con “${keep}”`); await cargarUso(); });
+  };
+
+  // ── Navegación con teclado en la grilla ─────────────────────────────────────
+  const irA = (el: Element | null | undefined) => {
+    if (!(el instanceof HTMLInputElement)) return;
+    el.focus(); el.scrollIntoView({ block: "nearest" });
+    if (el.dataset.nav === "cell") el.select();
+  };
+  const ultimaCol = useRef("");
+  const onGridKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const t = e.target as HTMLInputElement;
+    if (e.defaultPrevented || !t.dataset || !t.dataset.nav || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const esCelda = t.dataset.nav === "cell"; const tr = t.closest("tr"); if (!tr || !gridRef.current) return;
+    const todos = [...gridRef.current.querySelectorAll<HTMLInputElement>("input[data-nav]")];
+    if (e.key === "Enter" && esCelda) { e.preventDefault(); irA(todos[todos.indexOf(t) + 1]); return; }
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      if (!esCelda) return;
+      const a = t.selectionStart ?? 0, z = t.selectionEnd ?? 0, L = t.value.length; const todo = a === 0 && z === L;
+      if (!todo && ((e.key === "ArrowLeft" && a > 0) || (e.key === "ArrowRight" && z < L))) return;
+      const fila = [...tr.querySelectorAll<HTMLInputElement>("input[data-nav='cell']")];
+      e.preventDefault(); irA(fila[fila.indexOf(t) + (e.key === "ArrowRight" ? 1 : -1)]); return;
+    }
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      if (esCelda) ultimaCol.current = t.dataset.mk || "";
+      const filas = [...gridRef.current.querySelectorAll("table[data-hoja] tbody tr")].filter((r) => r.querySelector("input[data-nav]"));
+      const nr = filas[filas.indexOf(tr) + (e.key === "ArrowDown" ? 1 : -1)];
+      e.preventDefault(); if (!nr) return;
+      irA(nr.querySelector(`input[data-nav='cell'][data-mk="${CSS.escape(ultimaCol.current)}"]`) || nr.querySelector("input[data-nav]"));
+    }
+  };
+
+  // ── Opciones de los buscadores ──────────────────────────────────────────────
+  const usadas = new Set(M.bloques.map((b) => b.esp));
+  const opcionesEspecie = (raw: string): Opt[] => {
+    const q = clave(raw); const all = C.especies;
+    const hits = q ? all.filter((e) => clave(e).includes(q)).sort((a, b) => clave(a).indexOf(q) - clave(b).indexOf(q)) : all.filter((e) => !usadas.has(e));
+    const sim = raw.trim() ? parecidos(all, raw).filter((e) => !hits.includes(e)).slice(0, 3) : [];
+    const list: Opt[] = [...hits.filter((e) => !usadas.has(e)), ...hits.filter((e) => usadas.has(e))].slice(0, 10)
+      .map((v) => ({ v, ya: usadas.has(v), hint: usadas.has(v) ? "ya está en la semana" : undefined }));
+    for (const v of sim) list.push({ v, ya: usadas.has(v), hint: "parecido" });
+    if (raw.trim() && !mismoQue(all, raw)) list.push({ v: mayusInicial(raw.trim()), nuevo: true });
+    return list;
+  };
+  const elegirEspecie = (o: Opt) => {
+    let v = o.v;
+    if (o.nuevo) { const ex = mismoQue(C.especies, v); if (ex) v = ex; else saveCat((c) => { if (!c.especies.includes(v)) c.especies.push(v); }); }
+    if (!usadas.has(v)) setExtraEsp((x) => ({ ...x, [semana]: [...(x[semana] || []), v] }));
+    setTimeout(() => irA(gridRef.current?.querySelector(`section[data-esp="${CSS.escape(v)}"] input[data-nav='cell']`)), 50);
+  };
+  const opcionesProveedor = (esp: string, enBloque: string[]) => (raw: string): Opt[] => {
+    const all = C.proveedores.map((p) => p.nombre); const q = clave(raw);
+    const trabaja = (n: string) => (provBy(n)?.especies || []).includes(esp);
+    const libres = all.filter((n) => !enBloque.includes(n));
+    const hits = (q ? libres.filter((n) => clave(n).includes(q)) : libres.filter(trabaja))
+      .sort((a, b) => (+trabaja(b) - +trabaja(a)) || (q ? clave(a).indexOf(q) - clave(b).indexOf(q) : 0) || a.localeCompare(b)).slice(0, 8);
+    const sim = raw.trim() ? parecidos(libres, raw).filter((n) => !hits.includes(n)).slice(0, 3) : [];
+    const list: Opt[] = [...hits.map((v) => ({ v, hint: trabaja(v) ? `trabaja ${esp}` : undefined })), ...sim.map((v) => ({ v, hint: "parecido" }))];
+    const ex = mismoQue(all, raw);
+    if (ex && enBloque.includes(ex)) list.unshift({ v: ex, ya: true, hint: "ya está en esta especie" });
+    else if (raw.trim() && !ex) list.push({ v: raw.trim(), nuevo: true });
+    return list;
+  };
+  const elegirProveedor = (esp: string) => (o: Opt) => {
+    const ex = mismoQue(C.proveedores.map((p) => p.nombre), o.v); const n = ex || o.v.trim(); if (!n) return;
+    aprenderProv(n, esp);
+    setExtraProv((x) => { const w = { ...(x[semana] || {}) }; w[esp] = [...new Set([...(w[esp] || []), n])]; return { ...x, [semana]: w }; });
+    if (o.nuevo && ex && ex !== o.v.trim()) notify("info", `Se usó “${ex}”, que ya existía.`, 3000);
+    setTimeout(() => irA(gridRef.current?.querySelector(`section[data-esp="${CSS.escape(esp)}"] tr[data-prov="${CSS.escape(n)}"] input[data-nav='cell']`)), 50);
+  };
+
+  // ── Barra de la sección ─────────────────────────────────────────────────────
+  const { y } = parseWeek(semana); const anioActual = parseWeek(currentWeek()).y;
+  const estadoGuardado = pendientes > 0
+    ? <span className="inline-flex items-center gap-1.5 text-xs text-muted"><Spinner className="h-3.5 w-3.5" />Guardando…</span>
+    : errorGuardar
+      ? <span className="inline-flex items-center gap-1.5 text-xs text-danger"><Icon name="warning" className="h-4 w-4" />Sin guardar</span>
+      : <span className="inline-flex items-center gap-1.5 text-xs text-success" title="Cada cambio se guarda al momento"><Icon name="check" className="h-4 w-4" />Guardado automáticamente</span>;
+  const tot = (n: number, label: string, tone: string) => (
+    <span className={`inline-flex items-baseline gap-1.5 rounded-full px-3 py-1 ${tone}`}>
+      <b className="text-base tabular-nums">{fmt0(n)}</b><span className="text-xs font-semibold opacity-80">{label}</span>
+    </span>
+  );
+  const botonVista = (v: Vista, icon: string, label: string, soloIcono = false) => (
+    <button type="button" onClick={() => setVista(v)} aria-pressed={vista === v} title={label} aria-label={label}
+      className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold transition-colors ${vista === v ? "border-primary-line bg-primary-soft text-primary" : "border-line-strong bg-surface text-fg-2 hover:bg-surface-2"}`}>
+      <Icon name={icon} className="h-4 w-4" />{!soloIcono && <span className="hidden sm:inline">{label}</span>}
+    </button>
+  );
+  const barra = (
+    <div className="z-20 border-b border-line bg-bg/95 backdrop-blur md:sticky md:top-14">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-3 py-3 sm:px-6">
+        <div className="mr-auto min-w-0">
+          <h2 className="text-base font-semibold text-fg sm:text-lg">Pedidos semanales</h2>
+          <p className="text-xs text-muted">{weekRange(semana)} · {estadoGuardado}</p>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Button size="sm" variant="secondary" icon="chevronLeft" aria-label="Semana anterior" title="Semana anterior" onClick={() => setSemana(shiftWeek(semana, -1))} />
+          <select value={semana} onChange={(e) => setSemana(e.target.value)} aria-label="Semana"
+            className="h-8 rounded-lg border border-line-strong bg-surface px-2 text-sm font-semibold text-fg">
+            {Array.from({ length: 52 }, (_, i) => weekId(y, i + 1)).map((id) => (
+              <option key={id} value={id}>{weekShort(id)}{y !== anioActual ? ` · ${y}` : ""}</option>
+            ))}
+          </select>
+          <Button size="sm" variant="secondary" icon="chevronRight" aria-label="Semana siguiente" title="Semana siguiente" onClick={() => setSemana(shiftWeek(semana, 1))} />
+        </div>
+      </div>
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-2 px-3 pb-3 sm:px-6">
+        <div className="mr-auto flex flex-wrap gap-1.5">
+          {tot(M.pedTot, "Pedido", "bg-surface-3 text-fg-2")}
+          {tot(M.asgTot, "Asignado", "bg-success-soft text-success")}
+          {tot(M.falta, "Falta", M.falta > 0 ? "bg-warning-soft text-warning" : "bg-success-soft text-success")}
+          {M.demas > 0 && tot(M.demas, "De más", "bg-danger-soft text-danger")}
+        </div>
+        <div className="flex gap-1.5">
+          {botonVista("especie", "table", "Por especie")}
+          {botonVista("proveedor", "users", "Por proveedor")}
+          {botonVista("ajustes", "cog", "Ajustes", true)}
+        </div>
+      </div>
+    </div>
+  );
+
+  const cargando = !catOk || !semOk || (vista !== "ajustes" && !asigOk);
+  const sinCatalogo = catOk && !cat;
+
+  return (
+    <div className="flex min-w-0 flex-1 flex-col">
+      {barra}
+      <main ref={gridRef} onKeyDown={onGridKey} className="mx-auto w-full max-w-6xl flex-1 space-y-4 px-3 pt-4 pb-10 sm:px-6">
+        {aviso && <div role="status" className="rounded-xl border border-warning-line bg-warning-soft px-4 py-3 text-sm font-semibold text-warning">{aviso}</div>}
+        {cargando ? (
+          <div className="space-y-3">{[0, 1].map((i) => <div key={i} className="h-40 animate-pulse rounded-2xl border border-line bg-surface" />)}</div>
+        ) : sinCatalogo ? (
+          <section className="rounded-2xl border border-dashed border-line-strong bg-surface px-6 py-12 text-center">
+            <p className="text-base font-semibold text-fg">Aún no hay catálogo de especies, mercados y proveedores.</p>
+            <p className="mt-1 text-sm text-muted">Se puede cargar el de la planilla Pedidos_Semanales 2026 y luego editarlo en Ajustes.</p>
+            <Button className="mt-4" variant="primary" icon="plus" onClick={() => enqueue(() => store.setCatalogo(CATALOGO_INICIAL))}>
+              Cargar catálogo inicial ({CATALOGO_INICIAL.especies.length} especies · {CATALOGO_INICIAL.mercados.length} mercados · {CATALOGO_INICIAL.proveedores.length} proveedores)
+            </Button>
+          </section>
+        ) : vista === "proveedor" ? (
+          <VistaProveedor asig={asig} semana={semana} ordenar={ordenar} notify={notify} />
+        ) : vista === "ajustes" ? (
+          <Ajustes cat={C} uso={uso} saveCat={saveCat} renombrar={renombrar} unir={unir} notify={notify} />
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="mr-auto text-sm text-muted">
+                {M.bloques.length ? `${M.bloques.length} especies${M.bloques.filter((b) => b.diff).length ? ` · ${M.bloques.filter((b) => b.diff).length} con diferencia` : ""}` : ""}
+              </span>
+              {M.bloques.length > 0 && <Button size="sm" variant="danger-ghost" icon="trash" onClick={borrarSemana}>Borrar semana</Button>}
+            </div>
+            {M.bloques.length === 0 && (
+              <section className="rounded-2xl border border-dashed border-line-strong bg-surface px-6 py-10 text-center">
+                <p className="text-base font-semibold text-fg">Sin pedido para {weekShort(semana)}.</p>
+                <p className="mt-1 text-sm text-muted">Agrega la primera especie con el buscador de abajo.</p>
+              </section>
+            )}
+            {M.bloques.map((b) => (
+              <section key={b.esp} data-esp={b.esp} className="rounded-2xl border border-line bg-surface shadow-xs">
+                <div className="flex flex-wrap items-center gap-2 rounded-t-2xl border-b border-line bg-surface-2 px-4 py-2.5 sm:px-5">
+                  <h3 className="mr-auto text-base font-semibold text-fg">{b.esp}</h3>
+                  {b.pt === 0 && b.at === 0 ? <Badge>Nueva</Badge> : !b.diff ? <Badge tone="success">Completo</Badge> : <>
+                    {b.fp > 0 && <Badge tone="warning">Faltan {fmt0(b.fp)}</Badge>}
+                    {b.fn > 0 && <Badge tone="danger">{fmt0(b.fn)} de más</Badge>}
+                  </>}
+                  <Button size="sm" variant="danger-ghost" icon="trash" onClick={() => borrarEspecie(b.esp)} title="Borrar la especie de esta semana">Borrar</Button>
+                </div>
+                <div className="p-3 sm:p-5">
+                  <div className="overflow-x-auto rounded-lg border border-line-strong">
+                    <table data-hoja className="w-full min-w-[640px] text-sm">
+                      <thead>
+                        <tr className="bg-thead text-center text-[11px] font-semibold tracking-wide text-thead-fg uppercase">
+                          <th scope="col" className="w-[30%] px-3 py-2 text-left"><span className="sr-only">Fila</span></th>
+                          {mks.map((m: Mercado) => <th key={m.code} scope="col" title={m.nombre} className="px-1 py-2">{m.code}</th>)}
+                          <th scope="col" className="w-20 px-3 py-2">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr className="border-b border-line bg-primary-soft">
+                          <td className="px-3 py-1 text-xs font-bold tracking-wide text-primary uppercase">Pedido</td>
+                          {mks.map((m) => (
+                            <td key={m.code} className="w-16 px-1 py-0.5">
+                              <CeldaInput value={+b.ped[m.code] || 0} mk={m.code} fuerte label={`Pedido ${b.esp} ${m.nombre}`} onCommit={(v) => setPed(b.esp, m.code, v)} />
+                            </td>
+                          ))}
+                          <td className="px-3 text-center font-bold tabular-nums">{fmt0(b.pt)}</td>
+                        </tr>
+                        {b.provs.map((n, i) => {
+                          const f = b.filas[n]; let t = 0;
+                          return (
+                            <tr key={n} data-prov={n} className={`border-b border-line transition-colors ${i % 2 ? "bg-surface-2" : "bg-surface"} hover:bg-surface-3`}>
+                              <td className="px-3 py-0.5">
+                                <div className="flex min-w-0 items-center gap-0.5">
+                                  <span className="truncate text-fg">{n}</span>
+                                  <IconButton label={`Quitar ${n}`} icon="x" size="xs" tone="danger" onClick={() => quitarProv(b.esp, n)} />
+                                </div>
+                              </td>
+                              {mks.map((m) => { const v = f[m.code]?.cajas || 0; t += v; return (
+                                <td key={m.code} className="w-16 px-1 py-0.5">
+                                  <CeldaInput value={v} mk={m.code} label={`${n} ${b.esp} ${m.nombre}`} onCommit={(x) => setCeldaAsig(b.esp, n, m.code, x)} />
+                                </td>
+                              ); })}
+                              <td className="px-3 text-center font-semibold tabular-nums">{fmt0(t)}</td>
+                            </tr>
+                          );
+                        })}
+                        <tr className="border-b border-line bg-surface">
+                          <td colSpan={mks.length + 2} className="px-3 py-1.5">
+                            <Combo placeholder="+ Proveedor" ariaLabel={`Agregar proveedor a ${b.esp}`} nav="add"
+                              inputClassName="h-8 w-full max-w-64 rounded-lg border border-dashed border-line-strong bg-transparent px-2.5 text-sm text-fg placeholder:text-subtle scroll-mt-16 md:scroll-mt-40 focus:border-solid focus:border-primary focus:bg-surface focus:outline-none"
+                              getOptions={opcionesProveedor(b.esp, b.provs)} onPick={elegirProveedor(b.esp)} />
+                          </td>
+                        </tr>
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-line-strong bg-surface-3">
+                          <td className="px-3 py-1.5 text-xs font-bold tracking-wide text-fg uppercase">Falta</td>
+                          {mks.map((m) => { const v = b.falta[m.code] || 0; const pv = +b.ped[m.code] || 0; return (
+                            <td key={m.code} className="px-1 py-1.5 text-center">
+                              {v > 0 ? pill("warning", fmt0(v)) : v < 0 ? pill("danger", fmt0(v)) : pv ? pill("success", <Icon name="check" className="h-3.5 w-3.5" strokeWidth={2.5} />) : null}
+                            </td>
+                          ); })}
+                          <td className="px-3 py-1.5 text-center">
+                            {b.diff ? (b.ft > 0 ? pill("warning", fmt0(b.ft)) : b.ft < 0 ? pill("danger", fmt0(b.ft)) : pill("warning", "±")) : pill("success", <Icon name="check" className="h-3.5 w-3.5" strokeWidth={2.5} />)}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              </section>
+            ))}
+            <div className="relative max-w-md">
+              <Icon name="plus" className="pointer-events-none absolute top-2.5 left-3 h-4 w-4 text-muted" strokeWidth={2.5} />
+              <Combo placeholder="Agregar especie… escribe para buscar" ariaLabel="Agregar especie" flechasSiempre
+                inputClassName="field pl-9" getOptions={opcionesEspecie} onPick={elegirEspecie} />
+            </div>
+          </>
+        )}
+      </main>
+    </div>
+  );
+}
+
+// ── Vista por proveedor: qué y cuánto pedirle a cada uno ─────────────────────
+function VistaProveedor({ asig, semana, ordenar, notify }: { asig: Asig[]; semana: string; ordenar: (a: string[]) => string[]; notify: Notify }) {
+  const [copia, setCopia] = useState<{ prov: string; text: string } | null>(null);
+  const provs: Record<string, Asig[]> = {};
+  for (const a of asig) if (+a.cajas > 0) (provs[a.proveedor] ||= []).push(a);
+  const suma = (l: Asig[]) => l.reduce((s, a) => s + (+a.cajas || 0), 0);
+  const nombres = Object.keys(provs).sort((a, b) => suma(provs[b]) - suma(provs[a]));
+  const texto = (n: string) => {
+    const by: Record<string, Asig[]> = {}; for (const a of provs[n]) (by[a.especie] ||= []).push(a);
+    const filas = ordenar(Object.keys(by)).map((e) => `• ${e}: ${by[e].map((a) => `${a.mercado} ${fmt0(a.cajas)}`).join(", ")} (${fmt0(suma(by[e]))} cajas)`);
+    return `Pedido ${weekShort(semana)} (${weekRange(semana)}) — ${n}\n${filas.join("\n")}\nTotal: ${fmt0(suma(provs[n]))} cajas`;
+  };
+  const copiar = async (n: string) => {
+    const t = texto(n);
+    try { await navigator.clipboard.writeText(t); setCopia(null); notify("success", "Pedido copiado. Pégalo en WhatsApp o correo.", 2500); }
+    catch { setCopia({ prov: n, text: t }); }
+  };
+  if (!nombres.length) return (
+    <section className="rounded-2xl border border-dashed border-line-strong bg-surface px-6 py-12 text-center">
+      <p className="text-base font-semibold text-fg">Sin proveedores asignados.</p>
+      <p className="mt-1 text-sm text-muted">Asígnalos en la vista Por especie.</p>
+    </section>
+  );
+  return (
+    <>
+      <p className="text-sm text-muted">{nombres.length} proveedores con pedido · {weekRange(semana)}</p>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {nombres.map((n) => {
+          const by: Record<string, Asig[]> = {}; for (const a of provs[n]) (by[a.especie] ||= []).push(a);
+          return (
+            <div key={n} className="flex flex-col gap-2 rounded-2xl border border-line bg-surface p-4 shadow-xs">
+              <div className="flex items-baseline justify-between gap-2 border-b border-line pb-2">
+                <span className="truncate font-semibold text-fg">{n}</span>
+                <span className="text-lg font-bold text-primary tabular-nums">{fmt0(suma(provs[n]))}</span>
+              </div>
+              <ul className="space-y-1 text-sm">
+                {ordenar(Object.keys(by)).map((e) => (
+                  <li key={e} className="flex justify-between gap-3"><span>{e}</span><span className="text-right text-muted">{by[e].map((a) => `${a.mercado} ${fmt0(a.cajas)}`).join(" · ")}</span></li>
+                ))}
+              </ul>
+              <Button size="sm" variant="secondary" icon="copy" className="mt-auto self-start" onClick={() => copiar(n)}>Copiar pedido</Button>
+              {copia?.prov === n && <textarea readOnly autoFocus onFocus={(e) => e.currentTarget.select()} className="field h-36 text-xs" value={copia.text} />}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+// ── Ajustes: catálogo como etiquetas agrupadas (crear, editar, eliminar, unir) ─
+function Ajustes({ cat, uso, saveCat, renombrar, unir, notify }: {
+  cat: Catalogo; uso: Uso | null; saveCat: (m: (c: Catalogo) => void) => unknown;
+  renombrar: (k: Kind, from: string, to: string) => void; unir: (k: "esp" | "prov", keep: string, otros: string[]) => void; notify: Notify;
+}) {
+  const [edit, setEdit] = useState<{ kind: Kind; i: number } | null>(null);
+  const [agregando, setAgregando] = useState<Kind | null>(null);
+  const [f, setF] = useState<Record<string, string>>({});
+  const provNames = cat.proveedores.map((p) => p.nombre);
+  const usoTxt = (k: Kind, n: string) => { if (!uso) return "…"; const s = uso[k][n]; return s && s.size ? `usado en ${s.size} sem.` : "sin uso"; };
+
+  const abrir = (kind: Kind, i: number) => {
+    setAgregando(null); setEdit({ kind, i });
+    if (kind === "mk") { const m = cat.mercados[i]; setF({ code: m.code, nombre: m.nombre, empresa: m.empresa || "Frutam" }); }
+    else setF({ nombre: kind === "esp" ? cat.especies[i] : cat.proveedores[i].nombre });
+  };
+  const guardar = () => {
+    if (!edit) return; const { kind, i } = edit;
+    if (kind === "mk") {
+      const from = cat.mercados[i].code; const code = (f.code || "").trim().toUpperCase();
+      if (!code) return notify("error", "Escribe el código.");
+      if (cat.mercados.some((m, j) => j !== i && m.code === code)) return notify("error", `Ya existe el mercado ${code}.`);
+      setEdit(null);
+      saveCat((c) => { const x = c.mercados.find((m) => m.code === from); if (!x) return; x.code = code; x.nombre = (f.nombre || code).trim(); x.empresa = f.empresa || "Frutam"; c.mercados.sort((a, b) => +(a.empresa === "Polar") - +(b.empresa === "Polar")); });
+      if (code !== from) renombrar("mk", from, code); else notify("success", "Mercado actualizado", 2000);
+      return;
+    }
+    const lista = kind === "esp" ? cat.especies : provNames; const from = lista[i]; const to = (f.nombre || "").trim();
+    if (!to) return notify("error", "Escribe el nombre.");
+    const otro = lista.find((x, j) => j !== i && clave(x) === clave(to));
+    setEdit(null);
+    if (otro) return unir(kind, otro, [from]);           // mismo nombre normalizado: se unen
+    if (to === from) return;
+    if (kind === "esp") saveCat((c) => { const k = c.especies.indexOf(from); if (k >= 0) c.especies[k] = to; for (const p of c.proveedores) p.especies = (p.especies || []).map((e) => (e === from ? to : e)); });
+    else saveCat((c) => { const x = c.proveedores.find((p) => p.nombre === from); if (x) x.nombre = to; c.proveedores.sort((a, b) => a.nombre.localeCompare(b.nombre)); });
+    renombrar(kind, from, to);
+  };
+  const eliminar = () => {
+    if (!edit) return; const { kind, i } = edit; setEdit(null);
+    const name = kind === "mk" ? cat.mercados[i].code : kind === "esp" ? cat.especies[i] : cat.proveedores[i].nombre;
+    saveCat((c) => {
+      if (kind === "mk") c.mercados = c.mercados.filter((m) => m.code !== name);
+      else if (kind === "esp") { c.especies = c.especies.filter((e) => e !== name); for (const p of c.proveedores) p.especies = (p.especies || []).filter((e) => e !== name); }
+      else c.proveedores = c.proveedores.filter((p) => p.nombre !== name);
+    });
+    notify("success", `${name} eliminado de la lista`, 2500);
+  };
+  const agregar = (kind: Kind) => {
+    if (kind === "mk") {
+      const code = (f.code || "").trim().toUpperCase(); if (!code) return;
+      if (cat.mercados.some((m) => m.code === code)) return notify("error", `Ya existe el mercado ${code}.`);
+      saveCat((c) => { c.mercados.push({ code, nombre: (f.nombre || code).trim(), empresa: f.empresa || "Frutam" }); c.mercados.sort((a, b) => +(a.empresa === "Polar") - +(b.empresa === "Polar")); });
+    } else {
+      const lista = kind === "esp" ? cat.especies : provNames; const v = (f.nombre || "").trim(); if (!v) return;
+      const ex = mismoQue(lista, v); if (ex) return notify("info", `Ya existe como “${ex}”.`);
+      const sim = parecidos(lista, v);
+      if (kind === "esp") saveCat((c) => { c.especies.push(mayusInicial(v)); });
+      else saveCat((c) => { c.proveedores.push({ nombre: v, especies: [] }); c.proveedores.sort((a, b) => a.nombre.localeCompare(b.nombre)); });
+      notify("success", sim.length ? `${v} agregado. Ojo: se parece a “${sim[0]}”.` : `${v} agregado`, 3000);
+    }
+    setAgregando(null); setF({});
+  };
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") { e.preventDefault(); if (edit) guardar(); else if (agregando) agregar(agregando); }
+    if (e.key === "Escape") { setEdit(null); setAgregando(null); }
+  };
+  const inp = (k: string, ph: string, w: string, extra = "") => (
+    <input autoFocus={k === "nombre" || k === "code"} value={f[k] || ""} placeholder={ph} aria-label={ph} onChange={(e) => setF({ ...f, [k]: e.target.value })} onKeyDown={onKey}
+      className={`field h-8 py-0 ${w} ${extra}`} />
+  );
+  const selEmpresa = (
+    <select value={f.empresa || "Frutam"} aria-label="Empresa" onChange={(e) => setF({ ...f, empresa: e.target.value })} className="field h-8 w-auto py-0">
+      <option>Frutam</option><option>Polar</option>
+    </select>
+  );
+  const editor = (kind: Kind, nombre: string) => (
+    <span className="inline-flex flex-wrap items-center gap-1.5 rounded-xl border border-primary-line bg-primary-soft p-2">
+      {kind === "mk" ? <>{inp("code", "Código", "w-20", "font-bold")}{inp("nombre", "País", "w-36")}{selEmpresa}</> : inp("nombre", kind === "esp" ? "Especie" : "Proveedor", "w-56")}
+      <Button size="sm" variant="primary" onClick={guardar}>Guardar</Button>
+      <Button size="sm" variant="secondary" onClick={() => setEdit(null)}>Cancelar</Button>
+      <Button size="sm" variant="danger-ghost" icon="trash" onClick={eliminar}>Eliminar</Button>
+      <span className="px-1 text-xs text-muted">{usoTxt(kind, nombre)}</span>
+    </span>
+  );
+  const chip = (kind: Kind, i: number, label: string, sub?: string) =>
+    edit && edit.kind === kind && edit.i === i ? <React.Fragment key={kind + i}>{editor(kind, label)}</React.Fragment> : (
+      <button key={kind + i} type="button" onClick={() => abrir(kind, i)} title={`Editar ${label}`}
+        className="inline-flex h-7 items-center gap-1.5 rounded-full bg-primary-soft px-3 text-xs font-semibold text-primary ring-primary-line hover:ring-1">
+        {label}{sub && <span className="font-normal text-muted">{sub}</span>}
+      </button>
+    );
+  const grupo = (titulo: string, chips: React.ReactNode) => (
+    <div key={titulo} className="grid gap-2 border-t border-line py-3 sm:grid-cols-[130px_1fr]">
+      <div className="pt-1 text-xs font-semibold tracking-wide text-muted uppercase">{titulo}</div>
+      <div className="flex flex-wrap gap-1.5">{chips}</div>
+    </div>
+  );
+  const seccion = (kind: Kind, titulo: string, n: number, cuerpo: React.ReactNode) => (
+    <section className="rounded-2xl border border-line bg-surface p-4 shadow-xs sm:px-5">
+      <div className="flex flex-wrap items-center gap-2 pb-3">
+        <h3 className="mr-auto text-sm font-semibold text-fg">{titulo} · {n}</h3>
+        {agregando === kind ? (
+          <span className="inline-flex flex-wrap items-center gap-1.5 rounded-xl border border-primary-line bg-primary-soft p-2">
+            {kind === "mk" ? <>{inp("code", "Código", "w-24")}{inp("nombre", "País", "w-36")}{selEmpresa}</> : inp("nombre", kind === "esp" ? "Nueva especie" : "Nuevo proveedor", "w-56")}
+            <Button size="sm" variant="primary" onClick={() => agregar(kind)}>Agregar</Button>
+            <Button size="sm" variant="secondary" onClick={() => setAgregando(null)}>Cancelar</Button>
+          </span>
+        ) : (
+          <Button size="sm" variant="secondary" icon="plus" onClick={() => { setEdit(null); setF({}); setAgregando(kind); }}>Agregar</Button>
+        )}
+      </div>
+      {cuerpo}
+    </section>
+  );
+  const agrupar = <T,>(items: T[], key: (x: T) => string, orden: string[]) => {
+    const g: Record<string, T[]> = {}; for (const it of items) (g[key(it)] ||= []).push(it);
+    return Object.keys(g).sort((a, b) => { const ia = orden.indexOf(a), ib = orden.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b); }).map((k) => [k, g[k]] as [string, T[]]);
+  };
+  const dups = [...gruposDuplicados(cat.especies).map((names) => ({ kind: "esp" as const, names })), ...gruposDuplicados(provNames).map((names) => ({ kind: "prov" as const, names }))];
+
+  return (
+    <>
+      {dups.length > 0 && (
+        <section className="rounded-2xl border border-warning-line bg-warning-soft p-4 sm:px-5">
+          <h3 className="text-sm font-semibold text-warning">Posibles duplicados · {dups.length}</h3>
+          <p className="mt-1 text-sm text-fg-2">Elige con qué nombre quedarte; los datos de todas las semanas se juntan en ese nombre.</p>
+          {dups.map((g, gi) => (
+            <div key={gi} className="mt-2 flex flex-wrap items-center gap-2 border-t border-warning-line pt-2">
+              <span className="mr-auto text-sm text-fg">{g.kind === "esp" ? "Especie" : "Proveedor"}: <b>{g.names.join(" · ")}</b></span>
+              {g.names.map((n) => <Button key={n} size="sm" variant="secondary" onClick={() => unir(g.kind, n, g.names)}>Dejar “{n}”</Button>)}
+            </div>
+          ))}
+        </section>
+      )}
+      <p className="text-sm text-muted">Toca una etiqueta para editarla o eliminarla. Los cambios de nombre se aplican también en las semanas guardadas.</p>
+      {seccion("mk", "Mercados", cat.mercados.length,
+        agrupar(cat.mercados.map((m, i) => ({ m, i })), (x) => x.m.empresa || "Sin empresa", ["Frutam", "Polar"])
+          .map(([g, xs]) => grupo(g, xs.map(({ m, i }) => chip("mk", i, m.code, m.nombre)))))}
+      {seccion("esp", "Especies", cat.especies.length,
+        agrupar(cat.especies.map((e, i) => ({ e, i })), (x) => familia(x.e), [...FAMILIAS.map((x) => x[0]), "Otras"])
+          .map(([g, xs]) => grupo(g, xs.map(({ e, i }) => chip("esp", i, e)))))}
+      {seccion("prov", "Proveedores", cat.proveedores.length,
+        grupo("A–Z", cat.proveedores.map((p, i) => chip("prov", i, p.nombre))))}
+    </>
+  );
+}
