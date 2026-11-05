@@ -6,7 +6,7 @@
 export type Mercado = { code: string; nombre: string; empresa: string };
 export type Proveedor = { nombre: string; especies: string[] };
 export type Catalogo = { especies: string[]; mercados: Mercado[]; proveedores: Proveedor[] };
-/** pedido[especie][mercado] = cajas */
+/** pedido[especie][mercado] = pallets (el campo de las asignaciones se llama "cajas" por historia) */
 export type Pedido = Record<string, Record<string, number>>;
 export type Semana = { semana: string; pedido?: Pedido; actualizado?: number };
 export type Asig = { id: string; proveedor: string; especie: string; mercado: string; cajas: number; creado?: number };

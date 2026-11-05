@@ -168,8 +168,11 @@ const db = getFirestore(app);
 //        lateral fija; aviso claro si Firebase rechaza el acceso a Pedidos semanales.
 //  v56.2 menú lateral: el ☰ despliega un panel desde la izquierda bajo la barra superior
 //        (el botón pasa a ✕); se cierra al elegir sección, con ✕, Esc o tocando fuera.
-const APP_VERSION = "v56.2";
-const APP_VERSION_DATE = "4 Nov 2026";
+//  v56.3 Pedidos semanales: vista Resumen (matriz Proveedor/Especie × Oficina con
+//        contenedores y cuadratura por oficina: 21 pallets manzana, 20 resto, mezcla permitida);
+//        las cantidades se rotulan como pallets.
+const APP_VERSION = "v56.3";
+const APP_VERSION_DATE = "5 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
 // v51.7: etiqueta de entorno inyectada por vite.config.ts ("" en producción)

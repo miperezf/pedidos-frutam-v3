@@ -1,5 +1,5 @@
 // ── Sección "Pedidos semanales" (v56.0) ──────────────────────────────────────
-// Una hoja por semana (W01–W52). Cada especie es un bloque: fila Pedido (cajas
+// Una hoja por semana (W01–W52). Cada especie es un bloque: fila Pedido (pallets
 // por mercado) → proveedores asignados → Falta. Vista por proveedor para enviar
 // los pedidos y Ajustes para el catálogo (mercados, especies, proveedores).
 // Todo se guarda al momento (a diferencia de los pedidos por Mail ID).
@@ -12,9 +12,10 @@ import {
   parseCajas, parseWeek, shiftWeek, weekId, weekRange, weekShort,
 } from "./datos";
 import { CATALOGO_INICIAL } from "./catalogoInicial";
+import Resumen from "./Resumen";
 
 type Notify = (tone: string, message: React.ReactNode, ms?: number) => void;
-type Vista = "especie" | "proveedor" | "ajustes";
+type Vista = "especie" | "proveedor" | "resumen" | "ajustes";
 type Kind = "mk" | "esp" | "prov";
 type Opt = { v: string; nuevo?: boolean; ya?: boolean; hint?: string };
 type Celda = { cajas: number; ids: string[] };
@@ -437,6 +438,7 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
         <div className="flex gap-1.5">
           {botonVista("especie", "table", "Por especie")}
           {botonVista("proveedor", "users", "Por proveedor")}
+          {botonVista("resumen", "chart", "Resumen")}
           {botonVista("ajustes", "cog", "Ajustes", true)}
         </div>
       </div>
@@ -462,6 +464,8 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
               Cargar catálogo inicial ({CATALOGO_INICIAL.especies.length} especies · {CATALOGO_INICIAL.mercados.length} mercados · {CATALOGO_INICIAL.proveedores.length} proveedores)
             </Button>
           </section>
+        ) : vista === "resumen" ? (
+          <Resumen asig={asig} pedido={pedido} mks={mks} ordenar={ordenar} />
         ) : vista === "proveedor" ? (
           <VistaProveedor asig={asig} semana={semana} ordenar={ordenar} notify={notify} />
         ) : vista === "ajustes" ? (
@@ -576,8 +580,8 @@ function VistaProveedor({ asig, semana, ordenar, notify }: { asig: Asig[]; seman
   const nombres = Object.keys(provs).sort((a, b) => suma(provs[b]) - suma(provs[a]));
   const texto = (n: string) => {
     const by: Record<string, Asig[]> = {}; for (const a of provs[n]) (by[a.especie] ||= []).push(a);
-    const filas = ordenar(Object.keys(by)).map((e) => `• ${e}: ${by[e].map((a) => `${a.mercado} ${fmt0(a.cajas)}`).join(", ")} (${fmt0(suma(by[e]))} cajas)`);
-    return `Pedido ${weekShort(semana)} (${weekRange(semana)}) — ${n}\n${filas.join("\n")}\nTotal: ${fmt0(suma(provs[n]))} cajas`;
+    const filas = ordenar(Object.keys(by)).map((e) => `• ${e}: ${by[e].map((a) => `${a.mercado} ${fmt0(a.cajas)}`).join(", ")} (${fmt0(suma(by[e]))} pallets)`);
+    return `Pedido ${weekShort(semana)} (${weekRange(semana)}) — ${n}\n${filas.join("\n")}\nTotal: ${fmt0(suma(provs[n]))} pallets`;
   };
   const copiar = async (n: string) => {
     const t = texto(n);
