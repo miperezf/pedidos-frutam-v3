@@ -171,8 +171,10 @@ const db = getFirestore(app);
 //  v56.3 Pedidos semanales: vista Resumen (matriz Proveedor/Especie × Oficina con
 //        contenedores y cuadratura por oficina: 21 pallets manzana, 20 resto, mezcla permitida);
 //        las cantidades se rotulan como pallets.
-const APP_VERSION = "v56.3";
-const APP_VERSION_DATE = "5 Nov 2026";
+//  v56.4 Pedidos semanales: ordenar los bloques de especie arrastrando desde ⠿ (o ↑ ↓);
+//        el orden se guarda en el catálogo y es el mismo en todas las semanas y en Resumen.
+const APP_VERSION = "v56.4";
+const APP_VERSION_DATE = "10 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
 // v51.7: etiqueta de entorno inyectada por vite.config.ts ("" en producción)

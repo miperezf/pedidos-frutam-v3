@@ -3,7 +3,7 @@
 // por mercado) → proveedores asignados → Falta. Vista por proveedor para enviar
 // los pedidos y Ajustes para el catálogo (mercados, especies, proveedores).
 // Todo se guarda al momento (a diferencia de los pedidos por Mail ID).
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import { Icon, Button, IconButton, Badge, Spinner } from "../ui";
 import {
@@ -353,6 +353,71 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
     }
   };
 
+  // ── Ordenar bloques: arrastrar desde ⠿ (o ↑ ↓ con el ⠿ enfocado) ───────────
+  // El orden es el de la lista de especies del catálogo, así queda igual en todas
+  // las semanas y en el Resumen. Al arrastrar, los bloques se pliegan a su título.
+  const [arrastre, setArrastre] = useState<{ esp: string; orden: string[]; y: number } | null>(null);
+  const arrRef = useRef(arrastre); arrRef.current = arrastre;
+  const guardarOrden = useCallback((orden: string[]) => saveCat((c) => {
+    for (const e of orden) if (!c.especies.includes(e)) c.especies.push(e);
+    const lugares = orden.map((e) => c.especies.indexOf(e)).sort((a, b) => a - b);
+    lugares.forEach((pos, i) => { c.especies[pos] = orden[i]; });
+  }), [saveCat]);
+  const moverBloque = (esp: string, d: number) => {
+    const o = M.bloques.map((b) => b.esp); const i = o.indexOf(esp); const j = i + d;
+    if (i < 0 || j < 0 || j >= o.length) return;
+    [o[i], o[j]] = [o[j], o[i]]; guardarOrden(o);
+    setTimeout(() => gridRef.current?.querySelector<HTMLElement>(`button[data-grip="${CSS.escape(esp)}"]`)?.focus(), 30);
+  };
+  const iniciarArrastre = (e: React.PointerEvent, esp: string) => {
+    if (e.button !== 0 || M.bloques.length < 2) return;
+    e.preventDefault();
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    setArrastre({ esp, orden: M.bloques.map((b) => b.esp), y: e.clientY });
+  };
+  // Al empezar: dejar el título arrastrado bajo el puntero (los bloques se pliegan)
+  useLayoutEffect(() => {
+    const a = arrRef.current; if (!a) return;
+    const el = gridRef.current?.querySelector<HTMLElement>(`section[data-esp="${CSS.escape(a.esp)}"]`);
+    if (el) { const r = el.getBoundingClientRect(); window.scrollBy(0, r.top + r.height / 2 - a.y); }
+  }, [arrastre?.esp]);
+  useEffect(() => {
+    if (!arrastre) return;
+    const inicial = M.bloques.map((b) => b.esp).join("\u0000");
+    let y = arrastre.y;
+    const recolocar = () => {
+      const a = arrRef.current; if (!a) return;
+      const otros = [...(gridRef.current?.querySelectorAll<HTMLElement>("section[data-esp]") || [])].filter((s) => s.dataset.esp !== a.esp);
+      let idx = otros.findIndex((s) => { const r = s.getBoundingClientRect(); return y < r.top + r.height / 2; });
+      if (idx < 0) idx = otros.length;
+      const resto = otros.map((s) => s.dataset.esp as string);
+      const nuevo = [...resto.slice(0, idx), a.esp, ...resto.slice(idx)];
+      if (nuevo.join("\u0000") !== a.orden.join("\u0000")) setArrastre({ ...a, orden: nuevo, y });
+    };
+    const mover = (ev: PointerEvent) => { y = ev.clientY; recolocar(); };
+    const auto = setInterval(() => {
+      const d = y < 90 ? -14 : y > window.innerHeight - 70 ? 14 : 0;
+      if (d) { window.scrollBy(0, d); recolocar(); }
+    }, 16);
+    const soltar = () => {
+      const a = arrRef.current; setArrastre(null);
+      if (a && a.orden.join("\u0000") !== inicial) guardarOrden(a.orden);
+      setTimeout(() => a && gridRef.current?.querySelector<HTMLElement>(`section[data-esp="${CSS.escape(a.esp)}"]`)?.scrollIntoView({ block: "nearest" }), 30);
+    };
+    const cancelar = () => setArrastre(null);
+    const tecla = (ev: KeyboardEvent) => { if (ev.key === "Escape") cancelar(); };
+    const prevSel = document.body.style.userSelect; document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", mover); window.addEventListener("pointerup", soltar);
+    window.addEventListener("pointercancel", cancelar); window.addEventListener("keydown", tecla);
+    return () => {
+      clearInterval(auto); document.body.style.userSelect = prevSel;
+      window.removeEventListener("pointermove", mover); window.removeEventListener("pointerup", soltar);
+      window.removeEventListener("pointercancel", cancelar); window.removeEventListener("keydown", tecla);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arrastre?.esp]);
+  const bloquesVista = arrastre ? arrastre.orden.map((e) => M.bloques.find((b) => b.esp === e)).filter((b): b is Bloque => !!b) : M.bloques;
+
   // ── Opciones de los buscadores ──────────────────────────────────────────────
   const usadas = new Set(M.bloques.map((b) => b.esp));
   const opcionesEspecie = (raw: string): Opt[] => {
@@ -475,6 +540,7 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
             <div className="flex flex-wrap items-center gap-2">
               <span className="mr-auto text-sm text-muted">
                 {M.bloques.length ? `${M.bloques.length} especies${M.bloques.filter((b) => b.diff).length ? ` · ${M.bloques.filter((b) => b.diff).length} con diferencia` : ""}` : ""}
+                {M.bloques.length > 1 && <span className="hidden text-subtle sm:inline"> · arrastra <Icon name="grip" className="inline h-4 w-4 align-[-3px]" /> para ordenar</span>}
               </span>
               {M.bloques.length > 0 && <Button size="sm" variant="danger-ghost" icon="trash" onClick={borrarSemana}>Borrar semana</Button>}
             </div>
@@ -484,9 +550,18 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
                 <p className="mt-1 text-sm text-muted">Agrega la primera especie con el buscador de abajo.</p>
               </section>
             )}
-            {M.bloques.map((b) => (
-              <section key={b.esp} data-esp={b.esp} className="rounded-2xl border border-line bg-surface shadow-xs">
-                <div className="flex flex-wrap items-center gap-2 rounded-t-2xl border-b border-line bg-surface-2 px-4 py-2.5 sm:px-5">
+            {bloquesVista.map((b) => (
+              <section key={b.esp} data-esp={b.esp}
+                className={`rounded-2xl border bg-surface transition-shadow ${arrastre?.esp === b.esp ? "relative z-10 border-primary shadow-lg ring-2 ring-primary/30" : "border-line shadow-xs"}`}>
+                <div className={`flex flex-wrap items-center gap-2 bg-surface-2 py-2.5 pr-4 pl-2 sm:pr-5 sm:pl-3 ${arrastre ? "rounded-2xl" : "rounded-t-2xl border-b border-line"}`}>
+                  {M.bloques.length > 1 && (
+                    <button type="button" data-grip={b.esp} aria-label={`Mover ${b.esp} (flechas arriba y abajo)`} title="Arrastra para ordenar · o usa ↑ ↓"
+                      onPointerDown={(e) => iniciarArrastre(e, b.esp)}
+                      onKeyDown={(e) => { if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); moverBloque(b.esp, e.key === "ArrowUp" ? -1 : 1); } }}
+                      className={`flex h-8 w-7 shrink-0 touch-none items-center justify-center rounded-md text-subtle transition-colors hover:bg-surface-3 hover:text-fg focus-visible:text-primary ${arrastre?.esp === b.esp ? "cursor-grabbing text-primary" : "cursor-grab"}`}>
+                      <Icon name="grip" className="h-5 w-5" />
+                    </button>
+                  )}
                   <h3 className="mr-auto text-base font-semibold text-fg">{b.esp}</h3>
                   {b.pt === 0 && b.at === 0 ? <Badge>Nueva</Badge> : !b.diff ? <Badge tone="success">Completo</Badge> : <>
                     {b.fp > 0 && <Badge tone="warning">Faltan {fmt0(b.fp)}</Badge>}
@@ -494,7 +569,7 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
                   </>}
                   <Button size="sm" variant="danger-ghost" icon="trash" onClick={() => borrarEspecie(b.esp)} title="Borrar la especie de esta semana">Borrar</Button>
                 </div>
-                <div className="p-3 sm:p-5">
+                <div className={arrastre ? "hidden" : "p-3 sm:p-5"}>
                   <div className="overflow-x-auto rounded-lg border border-line-strong">
                     <table data-hoja className="w-full min-w-[640px] text-sm">
                       <thead>
