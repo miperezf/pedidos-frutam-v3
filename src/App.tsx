@@ -8,6 +8,7 @@ import {
   ACCESS_EMAIL, CODIGO_ACTIVO, EQUIPO_ID, PantallaCodigo, esCuentaCompartida, idPresencia, etiquetaPresencia,
   registrarEnviado, recordarUidAnterior, esEnvioDeEsteEquipo, mensajeErrorCodigo, CORREO_VALIDO,
 } from "./acceso";
+import { CapaSugerencias, actualizarSugerencias, registrarEnviados } from "./sugerencias";
 import { initializeApp } from "firebase/app";
 import { initializeAppCheck, ReCaptchaV3Provider, ReCaptchaEnterpriseProvider } from "firebase/app-check";
 import {
@@ -173,8 +174,11 @@ const db = getFirestore(app);
 //        las cantidades se rotulan como pallets.
 //  v56.4 Pedidos semanales: ordenar los bloques de especie arrastrando desde ⠿ (o ↑ ↓);
 //        el orden se guarda en el catálogo y es el mismo en todas las semanas y en Resumen.
-const APP_VERSION = "v56.4";
-const APP_VERSION_DATE = "10 Nov 2026";
+//  v56.5 sugerencias al escribir (proveedor, país, nave, exporta, especie, variedad,
+//        formato, calibre, categoría) desde los pedidos enviados de los últimos 90
+//        días; sin chocar con la navegación por flechas. Reemplaza el datalist nativo.
+const APP_VERSION = "v56.5";
+const APP_VERSION_DATE = "11 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
 // v51.7: etiqueta de entorno inyectada por vite.config.ts ("" en producción)
@@ -243,6 +247,8 @@ const TableInput = React.forwardRef(
       inputMode,
       ariaLabel,
       variant = "cell",
+      especie,
+      sugBase,
     },
     ref
   ) => {
@@ -267,6 +273,8 @@ const TableInput = React.forwardRef(
         readOnly={readOnly}
         list={list}
         autoComplete="off"
+        data-especie={especie || undefined}
+        data-sug-base={sugBase || undefined}
       />
     );
   }
@@ -306,6 +314,7 @@ const initialItemState = {
 // No incluye status/createdBy/createdAt/mailId/emailSubject a propósito.
 // ── v51.3: la lista de variedades de manzana debe ofrecerse tanto para
 // "MANZANA" (singular, el valor normalizado y el placeholder) como "MANZANAS".
+const APPLE_VARIETIES = ["GALA", "GRANNY", "FUJI", "PINK LADY", "ROJA", "CRIPPS PINK"];
 const isAppleSpecies = (especie) => {
   const v = especie ? especie.toUpperCase() : "";
   return v === "MANZANA" || v === "MANZANAS";
@@ -2436,6 +2445,7 @@ ${directoBlock}
       });
       await batch.commit();
       registrarEnviado(mailGlobalId); // v55.0: historial de este equipo
+      registrarEnviados(appId, ordersToProcess); // v56.0: sugerencias al escribir
       pendingDeletesRef.current = new Set();
 
 
@@ -3024,6 +3034,11 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
     if (ok) window.location.reload();
   };
 
+  // ── v56.0: sugerencias al escribir (una consulta al día por navegador) ──
+  useEffect(() => {
+    if (isAuthReady && userId) actualizarSugerencias(db, appId);
+  }, [isAuthReady, userId]);
+
   // ── v55.0: código de acceso ─────────────────────────────────────────────
   const ingresarConCodigo = async (codigo) => {
     if (!CORREO_VALIDO) return mensajeErrorCodigo("config/correo");
@@ -3334,7 +3349,10 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
     onBlur: handleBlurField((e) => handleItemBlur(item.id, e)),
     readOnly: item.isCanceled || currentOrderIsDeleted,
     isCanceledProp: item.isCanceled || currentOrderIsDeleted,
-    ...(field.apple && isAppleSpecies(item.especie) ? { list: "apple-varieties" } : {}),
+    // v56.0: sugerencias propias (la especie de la fila ordena las opciones; las
+    // variedades de manzana se ofrecen como base). Reemplaza el datalist nativo.
+    especie: item.especie,
+    ...(field.apple && isAppleSpecies(item.especie) ? { sugBase: APPLE_VARIETIES.join("|") } : {}),
   });
 
   return (
@@ -4055,14 +4073,7 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
         <p className="text-xs text-muted">Si lo abres igual, los cambios de ambos podrían solaparse y perderse información.</p>
       </Modal>
 
-      <datalist id="apple-varieties">
-        <option value="GALA" />
-        <option value="GRANNY" />
-        <option value="FUJI" />
-        <option value="PINK LADY" />
-        <option value="ROJA" />
-        <option value="CRIPPS PINK" />
-      </datalist>
+      <CapaSugerencias />
 
       {/* ── PANEL: HISTORIAL DE ENVÍOS ─────────────────────────────────────── */}
       <Modal
