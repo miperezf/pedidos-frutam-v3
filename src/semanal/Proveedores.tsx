@@ -32,7 +32,7 @@ export default function Proveedores({ asig, pedido, mks, ordenar }: {
   if (!provs.length) return (
     <section className="rounded-2xl border border-dashed border-line-strong bg-surface px-6 py-12 text-center">
       <p className="text-base font-semibold text-fg">Sin proveedores asignados esta semana.</p>
-      <p className="mt-1 text-sm text-muted">Asígnalos en Pedido: abre una especie y usa “+ proveedor”.</p>
+      <p className="mt-1 text-sm text-muted">Asígnalos en Pedido: abre una especie y usa “+ Agregar proveedor”.</p>
     </section>
   );
 

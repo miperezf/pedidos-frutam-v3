@@ -1,7 +1,7 @@
 // ── Sección "Pedidos semanales" (v58.0) ──────────────────────────────────────
 // Una hoja por semana (W01–W52). Vista Pedido: una sola tabla Especie × Oficina
 // donde se arma todo: cada especie es una fila con el pedido por oficina y, al
-// abrirla, sus proveedores con los pallets asignados y "+ proveedor". Las celdas
+// abrirla, sus proveedores con los pallets asignados y "+ Agregar proveedor". Las celdas
 // no se pintan: el estado de la asignación va en texto al final de la fila y el
 // detalle por oficina en la fila "Falta" de la especie abierta. Al pie, los
 // contenedores completos y los pallets sueltos de cada oficina. Vista
@@ -141,7 +141,6 @@ function Combo({ placeholder, getOptions, onPick, inputClassName, ariaLabel, nav
 
 // Controles que solo se ven al pasar el mouse por la fila (siempre visibles en pantallas táctiles)
 const AL_PASAR = "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100";
-const COMBO_QUIETO = "h-7 w-full rounded-md border border-transparent bg-transparent px-1.5 text-[13px] text-fg placeholder:text-subtle scroll-mt-16 md:scroll-mt-44 hover:border-line focus:border-primary focus:bg-surface focus:ring-2 focus:ring-primary/20 focus:outline-none";
 // Filas de totales al pie de la tabla: se eligen en el menú "Totales" y se recuerdan en el equipo
 const TOTALES = [
   { id: "pedido", label: "Pedido", desc: "Pallets pedidos por oficina" },
@@ -218,8 +217,8 @@ function MenuTotales({ valor, onChange }: { valor: TotalesVis; onChange: (v: Tot
   );
 }
 
-// "+ Agregar especie": un poco más visible que "+ proveedor" (borde punteado y texto más oscuro)
-const COMBO_ESPECIE = "h-8 w-full rounded-lg border border-dashed border-line-strong bg-surface px-2.5 text-[13px] font-medium text-fg placeholder:font-semibold placeholder:text-fg-2 scroll-mt-16 md:scroll-mt-44 hover:border-primary hover:placeholder:text-primary focus:border-solid focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none focus:placeholder:font-normal focus:placeholder:text-subtle";
+// "+ Agregar especie" y "+ Agregar proveedor": borde punteado y texto oscuro para que se vean sin recargar
+const COMBO_AGREGAR = "h-8 w-full rounded-lg border border-dashed border-line-strong bg-surface px-2.5 text-[13px] font-medium text-fg placeholder:font-semibold placeholder:text-fg-2 scroll-mt-16 md:scroll-mt-44 hover:border-primary hover:placeholder:text-primary focus:border-solid focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none focus:placeholder:font-normal focus:placeholder:text-subtle";
 const mayusInicial = (x: string) => x.charAt(0).toLocaleUpperCase("es") + x.slice(1);
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -842,8 +841,8 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                       )}
                       {abierta && (
                         <tr className="border-t border-line bg-surface">
-                          <td className="z-[1] bg-surface py-0.5 pr-2 pl-11 sm:sticky sm:left-0">
-                            <Combo placeholder="+ proveedor" ariaLabel={`Agregar proveedor a ${b.esp}`} nav="add" inputClassName={COMBO_QUIETO}
+                          <td className="z-[1] bg-surface py-1.5 pr-2 pl-11 sm:sticky sm:left-0">
+                            <Combo placeholder="+ Agregar proveedor" ariaLabel={`Agregar proveedor a ${b.esp}`} nav="add" inputClassName={COMBO_AGREGAR}
                               getOptions={opcionesProveedor(b.esp, b.provs)} onPick={elegirProveedor(b.esp)} />
                           </td>
                           <td colSpan={O.codes.length + 3} />
@@ -855,7 +854,7 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                 <tbody>
                   <tr className="border-t border-line bg-surface">
                     <td className={`z-[1] bg-surface py-2 pr-2 pl-6 sm:sticky sm:left-0 ${M.bloques.length && filasPie.length ? "" : "lg:rounded-bl-2xl"}`}>
-                      <Combo placeholder="+ Agregar especie" ariaLabel="Agregar especie" flechasSiempre inputClassName={COMBO_ESPECIE}
+                      <Combo placeholder="+ Agregar especie" ariaLabel="Agregar especie" flechasSiempre inputClassName={COMBO_AGREGAR}
                         getOptions={opcionesEspecie} onPick={elegirEspecie} />
                     </td>
                     <td colSpan={O.codes.length + 3} />

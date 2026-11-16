@@ -196,7 +196,8 @@ const db = getFirestore(app);
 //  v58.5 Menú "Totales": elegir qué filas del pie se ven (pedido, asignado, contenedores
 //        completos, pallets sueltos): una, varias, todas o ninguna. Se recuerda en el equipo.
 //  v58.6 "+ Agregar especie" un poco más visible (borde punteado).
-const APP_VERSION = "v58.6";
+//  v58.7 "+ Agregar proveedor" con el mismo estilo que "+ Agregar especie".
+const APP_VERSION = "v58.7";
 const APP_VERSION_DATE = "16 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
