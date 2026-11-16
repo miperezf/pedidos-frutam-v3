@@ -2,7 +2,7 @@
 // Una hoja por semana (W01–W52). Vista Pedido: una sola tabla Especie × Oficina
 // donde se arma todo: cada especie es una fila con el pedido por oficina y, al
 // abrirla, sus proveedores con los pallets asignados y "+ proveedor". Solo se
-// marca lo que falta (caja amarilla con −n) o sobra (caja roja suave). El
+// marca lo que falta (celda amarilla con −n) o sobra (celda roja suave). El
 // encabezado muestra los contenedores de cada oficina y si cuadran. Vista
 // Proveedores (consulta) y Ajustes para el catálogo.
 // Todo se guarda al momento (a diferencia de los pedidos por Mail ID).
@@ -55,8 +55,7 @@ const safeSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } 
 const clonar = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
 
 // ── Celda numérica: edita local, guarda al salir ─────────────────────────────
-// Siempre con caja visible (se tiene que ver dónde se digita). En la fila de pedido la
-// caja se tiñe: amarillo si falta asignar, rojo suave si hay asignado de más.
+// Sin caja a la vista: el borde aparece al pasar el mouse y al escribir.
 function CeldaInput({ value, onCommit, label, mk, tono, estado }: { value: number; onCommit: (v: number) => void; label: string; mk: string; tono: "pedido" | "prov"; estado?: "falta" | "sobra" }) {
   const [txt, setTxt] = useState(fmt(value));
   const foco = useRef(false);
@@ -69,7 +68,7 @@ function CeldaInput({ value, onCommit, label, mk, tono, estado }: { value: numbe
       data-nav="cell"
       data-mk={mk}
       value={txt}
-      className={`cell-input scroll-mt-16 scroll-mb-6 tabular-nums focus:border-primary focus:bg-surface md:scroll-mt-44 ${tono === "prov" ? "border-line text-[13px] text-muted" : `text-fg ${estado === "falta" ? "border-warning-line bg-warning-soft pr-7" : estado === "sobra" ? "border-danger/30 bg-danger-soft" : "border-line bg-surface"}`}`}
+      className={`cell-input scroll-mt-16 scroll-mb-6 tabular-nums md:scroll-mt-44 ${tono === "prov" ? "text-[13px] text-muted" : "text-fg-2"} ${estado === "falta" ? "pr-7" : ""}`}
       onFocus={(e) => { foco.current = true; recienEnfocada.current = true; e.currentTarget.select(); }}
       onMouseUp={(e) => { if (recienEnfocada.current) { e.preventDefault(); recienEnfocada.current = false; } }}
       onChange={(e) => { recienEnfocada.current = false; setTxt(e.target.value); }}
@@ -727,9 +726,10 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                         {O.codes.map((m) => {
                           const pv = +b.ped[m] || 0; const f = b.falta[m] || 0;
                           return (
-                            <td key={m} title={f > 0 ? `Faltan ${fmt0(f)} por asignar` : f < 0 ? `${fmt0(-f)} asignados de más` : undefined} className="relative px-1 py-0.5">
+                            <td key={m} title={f > 0 ? `Faltan ${fmt0(f)} por asignar` : f < 0 ? `${fmt0(-f)} asignados de más` : undefined}
+                              className={`relative px-1 py-0.5 ${f > 0 ? "bg-warning-soft" : f < 0 ? "bg-danger-soft" : ""}`}>
                               <CeldaInput value={pv} mk={m} tono="pedido" estado={f > 0 ? "falta" : f < 0 ? "sobra" : undefined} label={`Pedido ${b.esp} ${nombreOfi(m)}`} onCommit={(v) => setPed(b.esp, m, v)} />
-                              {f > 0 && <span data-delta className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-[10px] font-bold text-warning tabular-nums">−{fmt0(f)}</span>}
+                              {f > 0 && <span data-delta className="pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2 text-[10px] font-bold text-warning tabular-nums">−{fmt0(f)}</span>}
                             </td>
                           );
                         })}

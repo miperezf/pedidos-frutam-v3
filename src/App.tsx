@@ -189,7 +189,8 @@ const db = getFirestore(app);
 //  v58.1 El ⠿ para ordenar especies queda siempre visible; se quita "Copiar pedido".
 //  v58.2 Las celdas vuelven a mostrar su caja (pedido por oficina y proveedores); se quita el
 //        número rojo "+n" de lo asignado de más (queda la caja en rojo suave).
-const APP_VERSION = "v58.2";
+//  v58.3 Las celdas vuelven a quedar sin caja (el borde aparece al pasar el mouse o escribir).
+const APP_VERSION = "v58.3";
 const APP_VERSION_DATE = "16 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
