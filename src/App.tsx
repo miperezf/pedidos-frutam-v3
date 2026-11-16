@@ -177,8 +177,11 @@ const db = getFirestore(app);
 //  v56.5 sugerencias al escribir (proveedor, país, nave, exporta, especie, variedad,
 //        formato, calibre, categoría) desde los pedidos enviados de los últimos 90
 //        días; sin chocar con la navegación por flechas. Reemplaza el datalist nativo.
-const APP_VERSION = "v56.5";
-const APP_VERSION_DATE = "11 Nov 2026";
+//  v57.0 Pedidos semanales: el pedido se arma en una sola tabla editable (Especie × Oficina):
+//        cada especie es una fila con el pedido por oficina y lo que falta asignar; al abrirla
+//        se editan sus proveedores. Reemplaza las vistas "Por especie" y "Resumen".
+const APP_VERSION = "v57.0";
+const APP_VERSION_DATE = "16 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
 // v51.7: etiqueta de entorno inyectada por vite.config.ts ("" en producción)
