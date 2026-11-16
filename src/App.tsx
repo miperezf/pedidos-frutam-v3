@@ -186,7 +186,8 @@ const db = getFirestore(app);
 //  v58.0 Pedidos semanales, rediseño "mínimo": solo se marca lo que falta (amarillo) o sobra
 //        (rojo); contenedores y cuadratura por oficina en el encabezado; una sola barra con
 //        Pedido · Proveedores (consulta unificada + copiar pedido) y botón de pantalla completa.
-const APP_VERSION = "v58.0";
+//  v58.1 El ⠿ para ordenar especies queda siempre visible; se quita "Copiar pedido".
+const APP_VERSION = "v58.1";
 const APP_VERSION_DATE = "16 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;

@@ -4,7 +4,7 @@
 // abrirla, sus proveedores con los pallets asignados y "+ proveedor". Solo se
 // marca lo que falta (amarillo) o sobra (rojo); lo completo no lleva marca. El
 // encabezado muestra los contenedores de cada oficina y si cuadran. Vista
-// Proveedores (consulta + copiar pedido) y Ajustes para el catálogo.
+// Proveedores (consulta) y Ajustes para el catálogo.
 // Todo se guarda al momento (a diferencia de los pedidos por Mail ID).
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
@@ -641,7 +641,7 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
             </Button>
           </section>
         ) : vista === "proveedores" ? (
-          <Proveedores asig={asig} pedido={pedido} mks={mks} ordenar={ordenar} semana={semana} notify={notify} />
+          <Proveedores asig={asig} pedido={pedido} mks={mks} ordenar={ordenar} />
         ) : vista === "ajustes" ? (
           <Ajustes cat={C} uso={uso} saveCat={saveCat} renombrar={renombrar} unir={unir} notify={notify} />
         ) : (
@@ -710,7 +710,7 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                               <button type="button" data-grip={b.esp} aria-label={`Mover ${b.esp} (flechas arriba y abajo)`} title="Arrastra para ordenar · o usa ↑ ↓"
                                 onPointerDown={(e) => iniciarArrastre(e, b.esp)}
                                 onKeyDown={(e) => { if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); moverBloque(b.esp, e.key === "ArrowUp" ? -1 : 1); } }}
-                                className={`flex h-7 w-5 shrink-0 touch-none items-center justify-center rounded-md text-subtle hover:bg-surface-3 hover:text-fg focus-visible:text-primary ${movida ? "cursor-grabbing text-primary" : `cursor-grab ${AL_PASAR}`}`}>
+                                className={`flex h-7 w-5 shrink-0 touch-none items-center justify-center rounded-md text-subtle hover:bg-surface-3 hover:text-fg focus-visible:text-primary ${movida ? "cursor-grabbing text-primary" : "cursor-grab"}`}>
                                 <Icon name="grip" className="h-4.5 w-4.5" />
                               </button>
                             ) : <span className="w-5 shrink-0" />}
