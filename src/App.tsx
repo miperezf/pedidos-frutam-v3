@@ -190,7 +190,10 @@ const db = getFirestore(app);
 //  v58.2 Las celdas vuelven a mostrar su caja (pedido por oficina y proveedores); se quita el
 //        número rojo "+n" de lo asignado de más (queda la caja en rojo suave).
 //  v58.3 Las celdas vuelven a quedar sin caja (el borde aparece al pasar el mouse o escribir).
-const APP_VERSION = "v58.3";
+//  v58.4 Las celdas del pedido ya no se pintan: estado de asignación en texto al final de la fila
+//        y fila "Falta" al abrir la especie; contenedores completos y pallets sueltos al pie;
+//        botón Abrir todo / Cerrar todo más visible.
+const APP_VERSION = "v58.4";
 const APP_VERSION_DATE = "16 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;

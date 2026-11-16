@@ -1,9 +1,10 @@
 // ── Sección "Pedidos semanales" (v58.0) ──────────────────────────────────────
 // Una hoja por semana (W01–W52). Vista Pedido: una sola tabla Especie × Oficina
 // donde se arma todo: cada especie es una fila con el pedido por oficina y, al
-// abrirla, sus proveedores con los pallets asignados y "+ proveedor". Solo se
-// marca lo que falta (celda amarilla con −n) o sobra (celda roja suave). El
-// encabezado muestra los contenedores de cada oficina y si cuadran. Vista
+// abrirla, sus proveedores con los pallets asignados y "+ proveedor". Las celdas
+// no se pintan: el estado de la asignación va en texto al final de la fila y el
+// detalle por oficina en la fila "Falta" de la especie abierta. Al pie, los
+// contenedores completos y los pallets sueltos de cada oficina. Vista
 // Proveedores (consulta) y Ajustes para el catálogo.
 // Todo se guarda al momento (a diferencia de los pedidos por Mail ID).
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -11,7 +12,7 @@ import ReactDOM from "react-dom";
 import { Icon, Button, IconButton, Spinner } from "../ui";
 import {
   type Asig, type Catalogo, type Semana, type SemanalStore,
-  type Cuadratura, asigId, clave, cuadrar, currentWeek, familia, FAMILIAS, fmt, fmt0, fmt1, gruposDuplicados, mismoQue, parecidos,
+  type Cuadratura, asigId, clave, cuadrar, currentWeek, familia, FAMILIAS, fmt, fmt0, gruposDuplicados, mismoQue, parecidos,
   parseCajas, parseWeek, shiftWeek, weekId, weekRange, weekShort,
 } from "./datos";
 import { CATALOGO_INICIAL } from "./catalogoInicial";
@@ -56,7 +57,7 @@ const clonar = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
 
 // ── Celda numérica: edita local, guarda al salir ─────────────────────────────
 // Sin caja a la vista: el borde aparece al pasar el mouse y al escribir.
-function CeldaInput({ value, onCommit, label, mk, tono, estado }: { value: number; onCommit: (v: number) => void; label: string; mk: string; tono: "pedido" | "prov"; estado?: "falta" | "sobra" }) {
+function CeldaInput({ value, onCommit, label, mk, tono }: { value: number; onCommit: (v: number) => void; label: string; mk: string; tono: "pedido" | "prov" }) {
   const [txt, setTxt] = useState(fmt(value));
   const foco = useRef(false);
   const recienEnfocada = useRef(false);
@@ -68,7 +69,7 @@ function CeldaInput({ value, onCommit, label, mk, tono, estado }: { value: numbe
       data-nav="cell"
       data-mk={mk}
       value={txt}
-      className={`cell-input scroll-mt-16 scroll-mb-6 tabular-nums md:scroll-mt-44 ${tono === "prov" ? "text-[13px] text-muted" : "text-fg-2"} ${estado === "falta" ? "pr-7" : ""}`}
+      className={`cell-input scroll-mt-16 scroll-mb-6 tabular-nums md:scroll-mt-44 ${tono === "prov" ? "text-[13px] text-muted" : "text-fg-2"}`}
       onFocus={(e) => { foco.current = true; recienEnfocada.current = true; e.currentTarget.select(); }}
       onMouseUp={(e) => { if (recienEnfocada.current) { e.preventDefault(); recienEnfocada.current = false; } }}
       onChange={(e) => { recienEnfocada.current = false; setTxt(e.target.value); }}
@@ -617,14 +618,18 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
   const sinPermiso = aviso === SIN_PERMISO;
   const sinCatalogo = catOk && !cat && !sinPermiso;
   const todasAbiertas = M.bloques.length > 0 && M.bloques.every((b) => abiertas[b.esp]);
-  const contTot = O.codes.reduce((t, m) => t + O.cuad[m].cont, 0);
-  const tituloOfi = (m: string) => {
-    const q = O.cuad[m]; const n = nombreOfi(m);
-    if (!q.pallets) return n;
-    return q.completos ? `${n}: ${fmt0(q.pallets)} pallets = ${q.necesarios} ${q.necesarios === 1 ? "contenedor completo" : "contenedores completos"}`
-      : `${n}: ${fmt0(q.pallets)} pallets = ${fmt1(q.cont)} contenedores. Al último le faltan ${q.faltan} pallets para llenarse (o sobran ${q.sobran} para cerrar en ${q.necesarios - 1}). Contenedor de ${q.cap} pallets.`;
+  // Contenedores por oficina: completos + pallets sueltos (los que no alcanzan a llenar otro)
+  const contDe = (m: string) => { const q = O.cuad[m]; return q.completos ? q.necesarios : q.necesarios - 1; };
+  const sueltosDe = (m: string) => { const q = O.cuad[m]; return q.completos ? 0 : q.sobran; };
+  const contTot = O.codes.reduce((t, m) => t + contDe(m), 0);
+  const alternarTodas = () => setAbiertas(todasAbiertas ? {} : Object.fromEntries(M.bloques.map((b) => [b.esp, true])));
+  // Estado de la asignación de una especie: en texto, sin pintar las celdas del pedido
+  const estadoAsig = (b: Bloque) => {
+    if (b.pt === 0 && b.at === 0) return null;
+    if (b.at === 0) return <span className="text-subtle">sin asignar</span>;
+    if (!b.diff) return <Icon name="check" className="h-4 w-4 text-success" strokeWidth={2.5} aria-label="Asignación completa" />;
+    return <span className="font-semibold text-warning">{[b.fp > 0 ? `faltan ${fmt0(b.fp)}` : "", b.fn > 0 ? `${fmt0(b.fn)} de más` : ""].filter(Boolean).join(" · ")}</span>;
   };
-  const subTh = "mt-0.5 block text-[10.5px] font-medium tracking-normal normal-case";
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -653,40 +658,32 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                 <colgroup>
                   <col className="w-44 sm:w-60" />
                   {O.codes.map((m) => <col key={m} />)}
-                  <col className="w-24" /><col className="w-10" />
+                  <col className="w-16" /><col className="w-28" /><col className="w-10" />
                 </colgroup>
                 <thead>
                   <tr className="text-center text-[11px] font-semibold tracking-wide text-thead-fg uppercase">
-                    <th scope="col" className={`z-[12] bg-thead py-2 pr-2 pl-12 text-left align-middle sm:sticky sm:left-0 ${cabFija ? "lg:top-[var(--semanal-top)] lg:rounded-tl-2xl" : ""}`}>
-                      Especie
-                      {M.bloques.length > 0 && (
-                        <button type="button" onClick={() => setAbiertas(todasAbiertas ? {} : Object.fromEntries(M.bloques.map((b) => [b.esp, true])))}
-                          title={todasAbiertas ? "Ocultar los proveedores de todas las especies" : "Mostrar los proveedores de todas las especies"}
-                          className="ml-3 rounded px-1 text-[11px] font-medium tracking-normal text-thead-fg/70 normal-case hover:text-thead-fg hover:underline">
-                          {todasAbiertas ? "cerrar todo" : "abrir todo"}
-                        </button>
-                      )}
+                    <th scope="col" className={`z-[12] bg-thead py-2 pr-2 pl-3 text-left align-middle sm:sticky sm:left-0 sm:pl-12 ${cabFija ? "lg:top-[var(--semanal-top)] lg:rounded-tl-2xl" : ""}`}>
+                      <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        Especie
+                        {M.bloques.length > 0 && (
+                          <button type="button" onClick={alternarTodas} aria-pressed={todasAbiertas}
+                            title={todasAbiertas ? "Ocultar los proveedores de todas las especies" : "Mostrar los proveedores de todas las especies"}
+                            className="inline-flex h-6 items-center gap-1 rounded-md border border-white/40 bg-white/10 px-2 text-[11px] font-semibold tracking-normal text-thead-fg normal-case transition-colors hover:bg-white/20">
+                            <Icon name={todasAbiertas ? "chevronUp" : "chevronDown"} className="h-3 w-3" strokeWidth={2.5} />
+                            {todasAbiertas ? "Cerrar todo" : "Abrir todo"}
+                          </button>
+                        )}
+                      </span>
                     </th>
-                    {O.codes.map((m) => {
-                      const q = O.cuad[m];
-                      return (
-                        <th key={m} scope="col" data-ofi={m} title={tituloOfi(m)} className={`${thFija} px-1 py-2 align-top`}>
-                          {m}
-                          <span className={subTh} style={q.pallets && !q.completos ? { color: "#fcd34d", fontWeight: 700 } : { opacity: 0.65 }}>
-                            {q.pallets ? (q.completos ? `${q.necesarios} cont.` : `faltan ${q.faltan}`) : " "}
-                          </span>
-                        </th>
-                      );
-                    })}
-                    <th scope="col" className={`${thFija} px-1 py-2 align-top`}>
-                      Total<span className={subTh} style={{ opacity: 0.65 }}>{M.pedTot ? `${fmt1(contTot)} cont.` : " "}</span>
-                    </th>
+                    {O.codes.map((m) => <th key={m} scope="col" data-ofi={m} title={nombreOfi(m)} className={`${thFija} px-1 py-2 align-middle`}>{m}</th>)}
+                    <th scope="col" className={`${thFija} px-1 py-2 align-middle`}>Total</th>
+                    <th scope="col" className={`${thFija} px-2 py-2 text-left align-middle`}>Asignación</th>
                     <th scope="col" aria-label="Acciones" className={`${thFija} ${cabFija ? "lg:rounded-tr-2xl" : ""}`} />
                   </tr>
                 </thead>
                 {M.bloques.length === 0 && (
                   <tbody>
-                    <tr><td colSpan={O.codes.length + 3} className="px-6 py-10 text-center">
+                    <tr><td colSpan={O.codes.length + 4} className="px-6 py-10 text-center">
                       <p className="text-base font-semibold text-fg">Sin pedido para {weekShort(semana)}.</p>
                       {semanaOrigen ? <>
                         <p className="mt-1 text-sm text-muted">Parte con las mismas especies y proveedores de {weekShort(semanaOrigen)} (sin cantidades) o agrega la primera especie con “+ especie”.</p>
@@ -723,20 +720,13 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                             </button>
                           </div>
                         </td>
-                        {O.codes.map((m) => {
-                          const pv = +b.ped[m] || 0; const f = b.falta[m] || 0;
-                          return (
-                            <td key={m} title={f > 0 ? `Faltan ${fmt0(f)} por asignar` : f < 0 ? `${fmt0(-f)} asignados de más` : undefined}
-                              className={`relative px-1 py-0.5 ${f > 0 ? "bg-warning-soft" : f < 0 ? "bg-danger-soft" : ""}`}>
-                              <CeldaInput value={pv} mk={m} tono="pedido" estado={f > 0 ? "falta" : f < 0 ? "sobra" : undefined} label={`Pedido ${b.esp} ${nombreOfi(m)}`} onCommit={(v) => setPed(b.esp, m, v)} />
-                              {f > 0 && <span data-delta className="pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2 text-[10px] font-bold text-warning tabular-nums">−{fmt0(f)}</span>}
-                            </td>
-                          );
-                        })}
-                        <td className="px-1 text-center whitespace-nowrap tabular-nums">
-                          <span className="font-bold text-fg">{fmt0(b.pt)}</span>
-                          {b.fp > 0 && <span className="ml-1 text-[10px] font-bold text-warning" title={`Faltan ${fmt0(b.fp)} por asignar`}>−{fmt0(b.fp)}</span>}
-                        </td>
+                        {O.codes.map((m) => (
+                          <td key={m} className="px-1 py-0.5">
+                            <CeldaInput value={+b.ped[m] || 0} mk={m} tono="pedido" label={`Pedido ${b.esp} ${nombreOfi(m)}`} onCommit={(v) => setPed(b.esp, m, v)} />
+                          </td>
+                        ))}
+                        <td className="px-1 text-center font-bold text-fg tabular-nums">{fmt0(b.pt)}</td>
+                        <td data-asig className="px-2 text-left text-xs whitespace-nowrap">{estadoAsig(b)}</td>
                         <td className="text-center">
                           <IconButton label={`Borrar ${b.esp} de esta semana`} icon="trash" size="xs" tone="danger" className={AL_PASAR} onClick={() => borrarEspecie(b.esp)} />
                         </td>
@@ -752,17 +742,30 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                               </td>
                             ); })}
                             <td className="px-1 text-center text-[13px] text-muted tabular-nums">{t ? fmt0(t) : ""}</td>
+                            <td />
                             <td className="text-center"><IconButton label={`Quitar ${n} de ${b.esp}`} icon="x" size="xs" tone="danger" className={AL_PASAR} onClick={() => quitarProv(b.esp, n)} /></td>
                           </tr>
                         );
                       })}
+                      {abierta && b.diff && b.at > 0 && (
+                        <tr data-falta className="border-t border-line bg-surface text-xs">
+                          <td className="z-[1] bg-surface py-1 pr-2 pl-[3.25rem] font-medium text-muted sm:sticky sm:left-0">Falta</td>
+                          {O.codes.map((m) => { const f = b.falta[m] || 0; return (
+                            <td key={m} title={f < 0 ? `${fmt0(-f)} asignados de más` : undefined} className="px-1 text-center font-semibold text-warning tabular-nums">
+                              {f > 0 ? fmt0(f) : f < 0 ? `+${fmt0(-f)}` : ""}
+                            </td>
+                          ); })}
+                          <td className="px-1 text-center font-semibold text-warning tabular-nums">{b.fp > 0 ? fmt0(b.fp) : ""}</td>
+                          <td colSpan={2} />
+                        </tr>
+                      )}
                       {abierta && (
                         <tr className="border-t border-line bg-surface">
                           <td className="z-[1] bg-surface py-0.5 pr-2 pl-11 sm:sticky sm:left-0">
                             <Combo placeholder="+ proveedor" ariaLabel={`Agregar proveedor a ${b.esp}`} nav="add" inputClassName={COMBO_QUIETO}
                               getOptions={opcionesProveedor(b.esp, b.provs)} onPick={elegirProveedor(b.esp)} />
                           </td>
-                          <td colSpan={O.codes.length + 2} />
+                          <td colSpan={O.codes.length + 3} />
                         </tr>
                       )}
                     </tbody>
@@ -774,32 +777,42 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                       <Combo placeholder="+ especie" ariaLabel="Agregar especie" flechasSiempre inputClassName={COMBO_QUIETO}
                         getOptions={opcionesEspecie} onPick={elegirEspecie} />
                     </td>
-                    <td colSpan={O.codes.length + 2} />
+                    <td colSpan={O.codes.length + 3} />
                   </tr>
                 </tbody>
                 {M.bloques.length > 0 && (
                   <tfoot>
                     <tr className="border-t border-line-strong text-muted">
-                      <td className="z-[1] bg-surface py-1.5 pr-2 pl-12 text-left font-medium sm:sticky sm:left-0">Pedido</td>
+                      <td className="z-[1] bg-surface py-1.5 pr-2 pl-3 text-left font-medium sm:sticky sm:left-0 sm:pl-12">Pedido</td>
                       {O.codes.map((m) => <td key={m} className="px-1 text-center tabular-nums">{O.cuad[m].pallets ? fmt0(O.cuad[m].pallets) : ""}</td>)}
-                      <td className="px-1 text-center font-bold text-fg tabular-nums">{fmt0(M.pedTot)}</td><td />
+                      <td className="px-1 text-center font-bold tabular-nums">{fmt0(M.pedTot)}</td><td colSpan={2} />
                     </tr>
                     <tr className="border-t border-line text-muted">
-                      <td className={`z-[1] bg-surface py-1.5 pr-2 pl-12 text-left font-medium sm:sticky sm:left-0 ${cabFija ? "lg:rounded-bl-2xl" : ""}`}>Asignado</td>
+                      <td className="z-[1] bg-surface py-1.5 pr-2 pl-3 text-left font-medium sm:sticky sm:left-0 sm:pl-12">Asignado</td>
+                      {O.codes.map((m) => <td key={m} className="px-1 text-center tabular-nums">{O.asg[m] ? fmt0(O.asg[m]) : ""}</td>)}
+                      <td className="px-1 text-center font-bold tabular-nums">{fmt0(M.asgTot)}</td><td colSpan={2} />
+                    </tr>
+                    <tr data-cont className="border-t border-line-strong text-muted">
+                      <td className="z-[1] bg-surface py-1.5 pr-2 pl-3 text-left font-medium sm:sticky sm:left-0 sm:pl-12" title="Contenedores que el pedido de la oficina llena completos (21 pallets de manzana o 20 de otra especie)">Contenedores completos</td>
+                      {O.codes.map((m) => <td key={m} className="px-1 text-center font-semibold text-fg tabular-nums">{O.cuad[m].pallets ? contDe(m) : ""}</td>)}
+                      <td className="px-1 text-center font-bold text-fg tabular-nums">{contTot}</td><td colSpan={2} />
+                    </tr>
+                    <tr data-sueltos className="border-t border-line text-muted">
+                      <td className={`z-[1] bg-surface py-1.5 pr-2 pl-3 text-left font-medium sm:sticky sm:left-0 sm:pl-12 ${cabFija ? "lg:rounded-bl-2xl" : ""}`} title="Pallets del pedido que no alcanzan a llenar otro contenedor">Pallets sueltos</td>
                       {O.codes.map((m) => {
-                        const a = O.asg[m] || 0, p = O.cuad[m].pallets;
-                        return <td key={m} title={a !== p ? (a < p ? `Faltan ${fmt0(p - a)} por asignar` : `${fmt0(a - p)} asignados de más`) : undefined}
-                          className={`px-1 text-center tabular-nums ${a < p ? "font-bold text-warning" : a > p ? "font-bold text-danger" : ""}`}>{a ? fmt0(a) : ""}</td>;
+                        const q = O.cuad[m]; const su = sueltosDe(m);
+                        return <td key={m} title={su ? `Faltan ${q.faltan} pallets para completar otro contenedor (de ${q.cap} pallets)` : undefined}
+                          className={`px-1 text-center tabular-nums ${su ? "font-semibold text-warning" : "text-subtle"}`}>{q.pallets ? su : ""}</td>;
                       })}
-                      <td className={`px-1 text-center font-bold tabular-nums ${M.asgTot < M.pedTot ? "text-warning" : M.asgTot > M.pedTot ? "text-danger" : "text-fg"}`}>{fmt0(M.asgTot)}</td><td />
+                      <td colSpan={3} />
                     </tr>
                   </tfoot>
                 )}
               </table>
             </div>
             {M.bloques.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2 px-1">
-                <p className="mr-auto text-xs text-subtle">La fila de cada especie es el pedido por oficina; ábrela para asignar proveedores. Amarillo = falta asignar · rojo suave = asignado de más.</p>
+              <div className="flex items-start gap-3 px-1">
+                <p className="min-w-0 flex-1 pt-1.5 text-xs text-subtle">La fila de cada especie es el pedido por oficina; ábrela para asignar proveedores. Pallets sueltos = los que no alcanzan a llenar un contenedor (21 de manzana, 20 de otras especies).</p>
                 <Button size="sm" variant="danger-ghost" icon="trash" onClick={borrarSemana}>Borrar semana</Button>
               </div>
             )}
