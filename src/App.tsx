@@ -183,7 +183,10 @@ const db = getFirestore(app);
 //  v57.1 Pedidos semanales: "Copiar especies y proveedores" de la última semana con datos
 //        (sin cantidades); las filas aún sin pallets se recuerdan en el equipo.
 //  v57.2 El botón de copiar solo aparece al iniciar una semana vacía.
-const APP_VERSION = "v57.2";
+//  v58.0 Pedidos semanales, rediseño "mínimo": solo se marca lo que falta (amarillo) o sobra
+//        (rojo); contenedores y cuadratura por oficina en el encabezado; una sola barra con
+//        Pedido · Proveedores (consulta unificada + copiar pedido) y botón de pantalla completa.
+const APP_VERSION = "v58.0";
 const APP_VERSION_DATE = "16 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -421,6 +424,7 @@ const App = () => {
   const [seccion, setSeccion] = useState<SeccionId>(() => seccionDesdeHash());
   const [semanalAbierta, setSemanalAbierta] = useState(() => seccionDesdeHash() === "semanal");
   const [menuAbierto, setMenuAbierto] = useState(false);
+  const [semanalFull, setSemanalFull] = useState(false); // v58.0: pantalla completa de Pedidos semanales
   const barraRef = useRef<HTMLElement>(null);
   const semanalStore = React.useMemo(() => firestoreStore(db, appId), [appId]);
   useEffect(() => {
@@ -3361,12 +3365,13 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
     ...(field.apple && isAppleSpecies(item.especie) ? { sugBase: APPLE_VARIETIES.join("|") } : {}),
   });
 
+  const modoCompleto = seccion === "semanal" && semanalFull;
   return (
     <div className="flex min-h-screen flex-col bg-bg text-fg">
-      {envBanner}
+      {!modoCompleto && envBanner}
 
       {/* ── BARRA SUPERIOR ─────────────────────────────────────────────────── */}
-      <header ref={barraRef} className="sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur">
+      <header ref={barraRef} className={`sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur ${modoCompleto ? "hidden" : ""}`}>
         <div className="flex h-14 w-full items-center gap-3 px-3 sm:px-4">
           <IconButton label={menuAbierto ? "Cerrar menú" : "Menú"} icon={menuAbierto ? "x" : "menu"}
             onClick={() => setMenuAbierto((v) => !v)} aria-expanded={menuAbierto} />
@@ -3954,7 +3959,7 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
       </div>
       {semanalAbierta && (
         <div className={`min-w-0 flex-1 flex-col ${seccion === "semanal" ? "flex" : "hidden"}`}>
-          <PedidosSemanales store={semanalStore} notify={notify} />
+          <PedidosSemanales store={semanalStore} notify={notify} onPantallaCompleta={setSemanalFull} />
         </div>
       )}
       </div>

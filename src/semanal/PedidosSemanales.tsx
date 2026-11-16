@@ -1,25 +1,24 @@
-// ── Sección "Pedidos semanales" (v57.0) ──────────────────────────────────────
+// ── Sección "Pedidos semanales" (v58.0) ──────────────────────────────────────
 // Una hoja por semana (W01–W52). Vista Pedido: una sola tabla Especie × Oficina
 // donde se arma todo: cada especie es una fila con el pedido por oficina y, al
-// abrirla, sus proveedores con los pallets asignados y "+ Proveedor". Al pie,
-// asignado, pedido, contenedores y cuadratura por oficina. Dos cruces de consulta
-// (Proveedor × Oficina, Proveedor × Especie), vista por proveedor para enviar
-// los pedidos y Ajustes para el catálogo (mercados, especies, proveedores).
+// abrirla, sus proveedores con los pallets asignados y "+ proveedor". Solo se
+// marca lo que falta (amarillo) o sobra (rojo); lo completo no lleva marca. El
+// encabezado muestra los contenedores de cada oficina y si cuadran. Vista
+// Proveedores (consulta + copiar pedido) y Ajustes para el catálogo.
 // Todo se guarda al momento (a diferencia de los pedidos por Mail ID).
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
-import { Icon, Button, IconButton, Badge, Spinner } from "../ui";
+import { Icon, Button, IconButton, Spinner } from "../ui";
 import {
   type Asig, type Catalogo, type Semana, type SemanalStore,
-  asigId, clave, currentWeek, familia, FAMILIAS, fmt, fmt0, gruposDuplicados, mismoQue, parecidos,
+  type Cuadratura, asigId, clave, cuadrar, currentWeek, familia, FAMILIAS, fmt, fmt0, fmt1, gruposDuplicados, mismoQue, parecidos,
   parseCajas, parseWeek, shiftWeek, weekId, weekRange, weekShort,
 } from "./datos";
 import { CATALOGO_INICIAL } from "./catalogoInicial";
-import Resumen, { PieOficinas, cuadrar, type Cuadratura } from "./Resumen";
+import Proveedores from "./Proveedores";
 
 type Notify = (tone: string, message: React.ReactNode, ms?: number) => void;
-type Vista = "pedido" | "proveedor" | "ajustes";
-type Cruce = "editar" | "provOfi" | "provEsp";
+type Vista = "pedido" | "proveedores" | "ajustes";
 type Kind = "mk" | "esp" | "prov";
 type Opt = { v: string; nuevo?: boolean; ya?: boolean; hint?: string };
 type Celda = { cajas: number; ids: string[] };
@@ -56,7 +55,7 @@ const safeSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } 
 const clonar = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
 
 // ── Celda numérica: edita local, guarda al salir ─────────────────────────────
-function CeldaInput({ value, onCommit, label, mk, fuerte }: { value: number; onCommit: (v: number) => void; label: string; mk: string; fuerte?: boolean }) {
+function CeldaInput({ value, onCommit, label, mk, tono, delta }: { value: number; onCommit: (v: number) => void; label: string; mk: string; tono: "pedido" | "prov"; delta?: boolean }) {
   const [txt, setTxt] = useState(fmt(value));
   const foco = useRef(false);
   const recienEnfocada = useRef(false);
@@ -68,7 +67,7 @@ function CeldaInput({ value, onCommit, label, mk, fuerte }: { value: number; onC
       data-nav="cell"
       data-mk={mk}
       value={txt}
-      className={`cell-input scroll-mt-16 scroll-mb-6 tabular-nums md:scroll-mt-52 ${fuerte ? `bg-surface font-bold text-primary ${value ? "border-line-strong" : "border-line"}` : `border-line bg-surface ${value ? "font-semibold" : ""}`}`}
+      className={`cell-input scroll-mt-16 scroll-mb-6 tabular-nums md:scroll-mt-44 ${tono === "pedido" ? "text-fg-2" : "text-[13px] text-muted"} ${delta ? "pr-7" : ""}`}
       onFocus={(e) => { foco.current = true; recienEnfocada.current = true; e.currentTarget.select(); }}
       onMouseUp={(e) => { if (recienEnfocada.current) { e.preventDefault(); recienEnfocada.current = false; } }}
       onChange={(e) => { recienEnfocada.current = false; setTxt(e.target.value); }}
@@ -138,24 +137,40 @@ function Combo({ placeholder, getOptions, onPick, inputClassName, ariaLabel, nav
   );
 }
 
-const CRUCES: { id: Cruce; label: string; title: string }[] = [
-  { id: "editar", label: "Especie × Oficina", title: "Armar el pedido: oficinas, proveedores y pallets" },
-  { id: "provOfi", label: "Proveedor × Oficina", title: "Consulta: cuánto se compra a cada proveedor por oficina" },
-  { id: "provEsp", label: "Proveedor × Especie", title: "Consulta: qué se compra a cada proveedor" },
-];
+// Controles que solo se ven al pasar el mouse por la fila (siempre visibles en pantallas táctiles)
+const AL_PASAR = "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100";
+const COMBO_QUIETO = "h-7 w-full rounded-md border border-transparent bg-transparent px-1.5 text-[13px] text-fg placeholder:text-subtle scroll-mt-16 md:scroll-mt-44 hover:border-line focus:border-primary focus:bg-surface focus:ring-2 focus:ring-primary/20 focus:outline-none";
 const mayusInicial = (x: string) => x.charAt(0).toLocaleUpperCase("es") + x.slice(1);
 
 // ══════════════════════════════════════════════════════════════════════════════
-export default function PedidosSemanales({ store, notify }: { store: SemanalStore; notify: Notify }) {
+export default function PedidosSemanales({ store, notify, onPantallaCompleta }: {
+  store: SemanalStore; notify: Notify; onPantallaCompleta?: (activa: boolean) => void;
+}) {
   const [semana, setSemana] = useState(() => {
     const v = safeGet(SEMANA_KEY);
     return v && /^\d{4}-W\d{2}$/.test(v) && parseWeek(v).w <= 52 ? v : currentWeek();
   });
   const [vista, setVista] = useState<Vista>("pedido");
-  const [cruce, setCruce] = useState<Cruce>("editar");
+  // Pantalla completa: oculta la barra de la app, usa todo el ancho y pide pantalla completa al navegador
+  const [full, setFull] = useState(false);
+  const alternarFull = () => {
+    const on = !full; setFull(on);
+    try {
+      if (on) document.documentElement.requestFullscreen?.().catch(() => { /* el navegador no lo permite: queda el modo ampliado */ });
+      else if (document.fullscreenElement) document.exitFullscreen?.().catch(() => { /* ya salió */ });
+    } catch { /* sin API de pantalla completa */ }
+  };
+  useEffect(() => { onPantallaCompleta?.(full); }, [full, onPantallaCompleta]);
+  useEffect(() => {
+    if (!full) return;
+    let entro = !!document.fullscreenElement;
+    const cambio = () => { if (document.fullscreenElement) entro = true; else if (entro) setFull(false); }; // salió con Esc
+    document.addEventListener("fullscreenchange", cambio);
+    return () => document.removeEventListener("fullscreenchange", cambio);
+  }, [full]);
   const [abiertas, setAbiertas] = useState<Record<string, boolean>>(() => { try { return JSON.parse(safeGet(ABIERTAS_KEY) || "{}") || {}; } catch { return {}; } });
   useEffect(() => { safeSet(ABIERTAS_KEY, JSON.stringify(abiertas)); }, [abiertas]);
-  const [barH, setBarH] = useState(110);
+  const [barH, setBarH] = useState(64);
   const barraRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = barraRef.current; if (!el) return;
@@ -440,7 +455,7 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
 
   // ── Ordenar bloques: arrastrar desde ⠿ (o ↑ ↓ con el ⠿ enfocado) ───────────
   // El orden es el de la lista de especies del catálogo, así queda igual en todas
-  // las semanas y en los cruces. Al arrastrar, las especies se pliegan a su fila.
+  // las semanas y en Proveedores. Al arrastrar, las especies se pliegan a su fila.
   const [arrastre, setArrastre] = useState<{ esp: string; orden: string[]; y: number } | null>(null);
   const arrRef = useRef(arrastre); arrRef.current = arrastre;
   const guardarOrden = useCallback((orden: string[]) => saveCat((c) => {
@@ -544,28 +559,28 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
 
   // ── Barra de la sección ─────────────────────────────────────────────────────
   const { y } = parseWeek(semana); const anioActual = parseWeek(currentWeek()).y;
+  const ancho = full ? "max-w-none" : "max-w-6xl";
   const estadoGuardado = pendientes > 0
-    ? <span className="inline-flex items-center gap-1.5 text-xs text-muted"><Spinner className="h-3.5 w-3.5" />Guardando…</span>
+    ? <span className="inline-flex items-center gap-1 text-muted"><Spinner className="h-3 w-3" />Guardando…</span>
     : errorGuardar
-      ? <span className="inline-flex items-center gap-1.5 text-xs text-danger"><Icon name="warning" className="h-4 w-4" />Sin guardar</span>
-      : <span className="inline-flex items-center gap-1.5 text-xs text-success" title="Cada cambio se guarda al momento"><Icon name="check" className="h-4 w-4" />Guardado automáticamente</span>;
-  const tot = (n: number, label: string, tone: string) => (
-    <span className={`inline-flex items-baseline gap-1.5 rounded-full px-3 py-1 ${tone}`}>
-      <b className="text-base tabular-nums">{fmt0(n)}</b><span className="text-xs font-semibold opacity-80">{label}</span>
-    </span>
+      ? <span className="inline-flex items-center gap-1 text-danger"><Icon name="warning" className="h-3.5 w-3.5" />Sin guardar</span>
+      : <span className="inline-flex items-center gap-1 text-success" title="Cada cambio se guarda al momento"><Icon name="check" className="h-3.5 w-3.5" />Guardado</span>;
+  const tot = (n: number, label: string, color = "") => (
+    <span className={`whitespace-nowrap ${color}`}><b className={`tabular-nums ${color || "text-fg"}`}>{fmt0(n)}</b> {label}</span>
   );
-  const botonVista = (v: Vista, icon: string, label: string, soloIcono = false) => (
-    <button type="button" onClick={() => setVista(v)} aria-pressed={vista === v} title={label} aria-label={label}
-      className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold transition-colors ${vista === v ? "border-primary-line bg-primary-soft text-primary" : "border-line-strong bg-surface text-fg-2 hover:bg-surface-2"}`}>
-      <Icon name={icon} className="h-4 w-4" />{!soloIcono && <span className="hidden sm:inline">{label}</span>}
+  const punto = <span aria-hidden="true" className="text-subtle">·</span>;
+  const pestana = (v: Vista, label: string) => (
+    <button type="button" onClick={() => setVista(v)} aria-pressed={vista === v} aria-label={label}
+      className={`border-b-2 px-1 py-1.5 text-sm font-semibold transition-colors ${vista === v ? "border-primary text-primary" : "border-transparent text-muted hover:text-fg"}`}>
+      {label}
     </button>
   );
   const barra = (
-    <div ref={barraRef} className="z-20 border-b border-line bg-bg/95 backdrop-blur md:sticky md:top-14">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-3 py-3 sm:px-6">
-        <div className="mr-auto min-w-0">
-          <h2 className="text-base font-semibold text-fg sm:text-lg">Pedidos semanales</h2>
-          <p className="text-xs text-muted">{weekRange(semana)} · {estadoGuardado}</p>
+    <div ref={barraRef} className={`z-20 border-b border-line bg-bg/95 backdrop-blur md:sticky ${full ? "md:top-0" : "md:top-14"}`}>
+      <div className={`mx-auto flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2.5 sm:px-6 ${ancho}`}>
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-fg">Pedidos semanales</h2>
+          <p className="flex items-center gap-1.5 text-xs text-muted">{weekRange(semana)} {punto} {estadoGuardado}</p>
         </div>
         <div className="flex items-center gap-1.5">
           <Button size="sm" variant="secondary" icon="chevronLeft" aria-label="Semana anterior" title="Semana anterior" onClick={() => setSemana(shiftWeek(semana, -1))} />
@@ -577,18 +592,17 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
           </select>
           <Button size="sm" variant="secondary" icon="chevronRight" aria-label="Semana siguiente" title="Semana siguiente" onClick={() => setSemana(shiftWeek(semana, 1))} />
         </div>
-      </div>
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-2 px-3 pb-3 sm:px-6">
-        <div className="mr-auto flex flex-wrap gap-1.5">
-          {tot(M.pedTot, "Pedido", "bg-surface-3 text-fg-2")}
-          {tot(M.asgTot, "Asignado", "bg-success-soft text-success")}
-          {tot(M.falta, "Falta", M.falta > 0 ? "bg-warning-soft text-warning" : "bg-success-soft text-success")}
-          {M.demas > 0 && tot(M.demas, "De más", "bg-danger-soft text-danger")}
-        </div>
-        <div className="flex gap-1.5">
-          {botonVista("pedido", "table", "Pedido")}
-          {botonVista("proveedor", "users", "Por proveedor")}
-          {botonVista("ajustes", "cog", "Ajustes", true)}
+        <p data-totales className="mr-auto flex flex-wrap items-center gap-x-2 text-sm text-muted">
+          {tot(M.pedTot, "pedido")} {punto} {tot(M.asgTot, "asignado")} {punto} {tot(M.falta, "falta", M.falta > 0 ? "font-semibold text-warning" : "")}
+          {M.demas > 0 && <>{punto} {tot(M.demas, "de más", "font-semibold text-danger")}</>}
+        </p>
+        <div className="flex items-center gap-3">
+          {pestana("pedido", "Pedido")}
+          {pestana("proveedores", "Proveedores")}
+          <div className="flex items-center">
+            <IconButton label="Ajustes" icon="cog" size="sm" tone={vista === "ajustes" ? "primary" : "default"} aria-pressed={vista === "ajustes"} onClick={() => setVista("ajustes")} />
+            <IconButton label={full ? "Salir de pantalla completa" : "Pantalla completa"} icon={full ? "collapse" : "expand"} size="sm" aria-pressed={full} onClick={alternarFull} />
+          </div>
         </div>
       </div>
     </div>
@@ -597,15 +611,24 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
   const cargando = !catOk || !semOk || (vista !== "ajustes" && !asigOk);
   const nombreOfi = (c: string) => mks.find((m) => m.code === c)?.nombre || c;
   // Encabezado de oficinas fijo al bajar (solo si la tabla cabe sin deslizar hacia el lado)
-  const cabFija = O.codes.length <= 9;
+  const cabFija = O.codes.length <= 9 || full;
   const thFija = cabFija ? "z-[11] bg-thead lg:sticky lg:top-[var(--semanal-top)]" : "bg-thead";
   const sinPermiso = aviso === SIN_PERMISO;
   const sinCatalogo = catOk && !cat && !sinPermiso;
+  const todasAbiertas = M.bloques.length > 0 && M.bloques.every((b) => abiertas[b.esp]);
+  const contTot = O.codes.reduce((t, m) => t + O.cuad[m].cont, 0);
+  const tituloOfi = (m: string) => {
+    const q = O.cuad[m]; const n = nombreOfi(m);
+    if (!q.pallets) return n;
+    return q.completos ? `${n}: ${fmt0(q.pallets)} pallets = ${q.necesarios} ${q.necesarios === 1 ? "contenedor completo" : "contenedores completos"}`
+      : `${n}: ${fmt0(q.pallets)} pallets = ${fmt1(q.cont)} contenedores. Al último le faltan ${q.faltan} pallets para llenarse (o sobran ${q.sobran} para cerrar en ${q.necesarios - 1}). Contenedor de ${q.cap} pallets.`;
+  };
+  const subTh = "mt-0.5 block text-[10.5px] font-medium tracking-normal normal-case";
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       {barra}
-      <main ref={gridRef} onKeyDown={onGridKey} className="mx-auto w-full max-w-6xl flex-1 space-y-4 px-3 pt-4 pb-10 sm:px-6">
+      <main ref={gridRef} onKeyDown={onGridKey} className={`mx-auto w-full flex-1 space-y-3 px-3 pt-4 pb-10 sm:px-6 ${ancho}`}>
         {aviso && <div role="status" className="rounded-xl border border-warning-line bg-warning-soft px-4 py-3 text-sm font-semibold text-warning">{aviso}</div>}
         {cargando ? (
           <div className="space-y-3">{[0, 1].map((i) => <div key={i} className="h-40 animate-pulse rounded-2xl border border-line bg-surface" />)}</div>
@@ -617,225 +640,177 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
               Cargar catálogo inicial ({CATALOGO_INICIAL.especies.length} especies · {CATALOGO_INICIAL.mercados.length} mercados · {CATALOGO_INICIAL.proveedores.length} proveedores)
             </Button>
           </section>
-        ) : vista === "proveedor" ? (
-          <VistaProveedor asig={asig} semana={semana} ordenar={ordenar} notify={notify} />
+        ) : vista === "proveedores" ? (
+          <Proveedores asig={asig} pedido={pedido} mks={mks} ordenar={ordenar} semana={semana} notify={notify} />
         ) : vista === "ajustes" ? (
           <Ajustes cat={C} uso={uso} saveCat={saveCat} renombrar={renombrar} unir={unir} notify={notify} />
         ) : (
           <>
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex flex-wrap gap-1.5" role="group" aria-label="Cruce">
-                {CRUCES.map((c) => (
-                  <button key={c.id} type="button" onClick={() => setCruce(c.id)} aria-pressed={cruce === c.id} title={c.title}
-                    className={`inline-flex h-8 items-center rounded-lg border px-3 text-xs font-semibold transition-colors ${cruce === c.id ? "border-primary bg-primary text-primary-fg" : "border-line-strong bg-surface text-fg-2 hover:bg-surface-2"}`}>
-                    {c.label}
-                  </button>
-                ))}
-              </div>
-              <span className="mr-auto hidden text-xs text-muted lg:inline">
-                {cruce !== "editar" ? "Solo consulta · pallets"
-                  : M.bloques.length ? `${M.bloques.length} especies${M.bloques.filter((b) => b.diff).length ? ` · ${M.bloques.filter((b) => b.diff).length} con diferencia` : ""}` : ""}
-              </span>
-              {cruce === "editar" && M.bloques.length > 0 && (
-                <div className="ml-auto flex flex-wrap items-center gap-1 lg:ml-0">
-                  <Button size="sm" variant="ghost" onClick={() => setAbiertas(Object.fromEntries(M.bloques.map((b) => [b.esp, true])))}>Abrir todo</Button>
-                  <Button size="sm" variant="ghost" onClick={() => setAbiertas({})}>Cerrar todo</Button>
-                  <Button size="sm" variant="danger-ghost" icon="trash" onClick={borrarSemana}>Borrar semana</Button>
-                </div>
-              )}
-            </div>
-            {cruce !== "editar" ? (
-              <Resumen asig={asig} pedido={pedido} mks={mks} ordenar={ordenar} cruce={cruce} />
-            ) : (
-              <div className={`rounded-2xl border border-line bg-surface shadow-xs ${cabFija ? "overflow-x-auto lg:overflow-visible" : "overflow-x-auto"}`}
-                style={{ "--semanal-top": `${56 + barH}px` } as React.CSSProperties}>
-                <table data-hoja className="w-full table-fixed text-sm" style={{ minWidth: 400 + O.codes.length * 64 }}>
-                  <colgroup>
-                    <col className="w-44 sm:w-56" />
-                    {O.codes.map((m) => <col key={m} />)}
-                    <col className="w-16" /><col className="w-36" />
-                  </colgroup>
-                  <thead>
-                    <tr className="text-center text-[11px] font-semibold tracking-wide text-thead-fg uppercase">
-                      <th scope="col" className={`z-[12] bg-thead px-3 py-2 text-left sm:sticky sm:left-0 ${cabFija ? "lg:top-[var(--semanal-top)] lg:rounded-tl-2xl" : ""}`}>Especie</th>
-                      {O.codes.map((m) => <th key={m} scope="col" title={nombreOfi(m)} className={`${thFija} px-1 py-2`}>{m}</th>)}
-                      <th scope="col" className={`${thFija} px-1 py-2`}>Total</th>
-                      <th scope="col" className={`${thFija} px-2 py-2 text-left ${cabFija ? "lg:rounded-tr-2xl" : ""}`}>Estado</th>
-                    </tr>
-                  </thead>
-                  {M.bloques.length === 0 && (
-                    <tbody>
-                      <tr><td colSpan={O.codes.length + 3} className="px-6 py-10 text-center">
-                        <p className="text-base font-semibold text-fg">Sin pedido para {weekShort(semana)}.</p>
-                        {semanaOrigen ? <>
-                          <p className="mt-1 text-sm text-muted">Parte con las mismas especies y proveedores de {weekShort(semanaOrigen)} (sin cantidades) o agrega la primera especie con el buscador de abajo.</p>
-                          <Button className="mt-4" variant="primary" icon="duplicate" disabled={copiando} onClick={copiarEstructura}>
-                            Copiar especies y proveedores de {weekShort(semanaOrigen)}
-                          </Button>
-                        </> : <p className="mt-1 text-sm text-muted">Agrega la primera especie con el buscador de abajo.</p>}
-                      </td></tr>
-                    </tbody>
-                  )}
-                  {bloquesVista.map((b) => {
-                    const abierta = !arrastre && !!abiertas[b.esp];
-                    const movida = arrastre?.esp === b.esp;
-                    const bg = movida || abierta ? "bg-primary-soft" : "bg-surface";
-                    return (
-                      <tbody key={b.esp} data-esp={b.esp}>
-                        <tr className={`border-t ${abierta ? "border-primary-line" : "border-line"} ${bg}`}>
-                          <td className={`z-[1] py-1.5 pr-1 pl-1 sm:sticky sm:left-0 ${bg}`}>
-                            <div className="flex min-w-0 items-center">
-                              {M.bloques.length > 1 && (
-                                <button type="button" data-grip={b.esp} aria-label={`Mover ${b.esp} (flechas arriba y abajo)`} title="Arrastra para ordenar · o usa ↑ ↓"
-                                  onPointerDown={(e) => iniciarArrastre(e, b.esp)}
-                                  onKeyDown={(e) => { if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); moverBloque(b.esp, e.key === "ArrowUp" ? -1 : 1); } }}
-                                  className={`flex h-8 w-6 shrink-0 touch-none items-center justify-center rounded-md text-subtle transition-colors hover:bg-surface-3 hover:text-fg focus-visible:text-primary ${movida ? "cursor-grabbing text-primary" : "cursor-grab"}`}>
-                                  <Icon name="grip" className="h-5 w-5" />
-                                </button>
-                              )}
-                              <button type="button" data-abrir={b.esp} onClick={() => setAbiertas((a) => { const n = { ...a }; if (n[b.esp]) delete n[b.esp]; else n[b.esp] = true; return n; })}
-                                aria-expanded={abierta} title={abierta ? "Ocultar proveedores" : "Ver y editar proveedores"}
-                                className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-0.5 pr-1 pl-0.5 text-left hover:text-primary">
-                                <Icon name={abierta ? "chevronDown" : "chevronRight"} className="h-4 w-4 shrink-0 text-muted" strokeWidth={2.5} />
-                                <span className="min-w-0">
-                                  <span className="block truncate font-semibold text-fg" title={b.esp}>{b.esp}</span>
-                                  <span className="block text-[11px] leading-tight text-muted">{b.provs.length ? `${b.provs.length} ${b.provs.length === 1 ? "proveedor" : "proveedores"}` : "Sin proveedores"}</span>
-                                </span>
+            <div className={`rounded-2xl border border-line bg-surface shadow-xs ${cabFija ? "overflow-x-auto lg:overflow-visible" : "overflow-x-auto"}`}
+              style={{ "--semanal-top": `${(full ? 0 : 56) + barH}px` } as React.CSSProperties}>
+              <table data-hoja className="w-full table-fixed text-sm" style={{ minWidth: 380 + O.codes.length * 68 }}>
+                <colgroup>
+                  <col className="w-44 sm:w-60" />
+                  {O.codes.map((m) => <col key={m} />)}
+                  <col className="w-24" /><col className="w-10" />
+                </colgroup>
+                <thead>
+                  <tr className="text-center text-[11px] font-semibold tracking-wide text-thead-fg uppercase">
+                    <th scope="col" className={`z-[12] bg-thead py-2 pr-2 pl-12 text-left align-middle sm:sticky sm:left-0 ${cabFija ? "lg:top-[var(--semanal-top)] lg:rounded-tl-2xl" : ""}`}>
+                      Especie
+                      {M.bloques.length > 0 && (
+                        <button type="button" onClick={() => setAbiertas(todasAbiertas ? {} : Object.fromEntries(M.bloques.map((b) => [b.esp, true])))}
+                          title={todasAbiertas ? "Ocultar los proveedores de todas las especies" : "Mostrar los proveedores de todas las especies"}
+                          className="ml-3 rounded px-1 text-[11px] font-medium tracking-normal text-thead-fg/70 normal-case hover:text-thead-fg hover:underline">
+                          {todasAbiertas ? "cerrar todo" : "abrir todo"}
+                        </button>
+                      )}
+                    </th>
+                    {O.codes.map((m) => {
+                      const q = O.cuad[m];
+                      return (
+                        <th key={m} scope="col" data-ofi={m} title={tituloOfi(m)} className={`${thFija} px-1 py-2 align-top`}>
+                          {m}
+                          <span className={subTh} style={q.pallets && !q.completos ? { color: "#fcd34d", fontWeight: 700 } : { opacity: 0.65 }}>
+                            {q.pallets ? (q.completos ? `${q.necesarios} cont.` : `faltan ${q.faltan}`) : " "}
+                          </span>
+                        </th>
+                      );
+                    })}
+                    <th scope="col" className={`${thFija} px-1 py-2 align-top`}>
+                      Total<span className={subTh} style={{ opacity: 0.65 }}>{M.pedTot ? `${fmt1(contTot)} cont.` : " "}</span>
+                    </th>
+                    <th scope="col" aria-label="Acciones" className={`${thFija} ${cabFija ? "lg:rounded-tr-2xl" : ""}`} />
+                  </tr>
+                </thead>
+                {M.bloques.length === 0 && (
+                  <tbody>
+                    <tr><td colSpan={O.codes.length + 3} className="px-6 py-10 text-center">
+                      <p className="text-base font-semibold text-fg">Sin pedido para {weekShort(semana)}.</p>
+                      {semanaOrigen ? <>
+                        <p className="mt-1 text-sm text-muted">Parte con las mismas especies y proveedores de {weekShort(semanaOrigen)} (sin cantidades) o agrega la primera especie con “+ especie”.</p>
+                        <Button className="mt-4" variant="primary" icon="duplicate" disabled={copiando} onClick={copiarEstructura}>
+                          Copiar especies y proveedores de {weekShort(semanaOrigen)}
+                        </Button>
+                      </> : <p className="mt-1 text-sm text-muted">Agrega la primera especie con “+ especie”.</p>}
+                    </td></tr>
+                  </tbody>
+                )}
+                {bloquesVista.map((b) => {
+                  const abierta = !arrastre && !!abiertas[b.esp];
+                  const movida = arrastre?.esp === b.esp;
+                  const bg = movida ? "bg-primary-soft" : abierta ? "bg-surface-2" : "bg-surface";
+                  const bgTd = movida || abierta ? bg : "bg-surface group-hover:bg-surface-2";
+                  return (
+                    <tbody key={b.esp} data-esp={b.esp}>
+                      <tr className={`group border-t border-line ${bg} ${movida || abierta ? "" : "hover:bg-surface-2"}`}>
+                        <td className={`z-[1] py-0.5 pr-1 pl-1 sm:sticky sm:left-0 ${bgTd}`}>
+                          <div className="flex min-w-0 items-center">
+                            {M.bloques.length > 1 ? (
+                              <button type="button" data-grip={b.esp} aria-label={`Mover ${b.esp} (flechas arriba y abajo)`} title="Arrastra para ordenar · o usa ↑ ↓"
+                                onPointerDown={(e) => iniciarArrastre(e, b.esp)}
+                                onKeyDown={(e) => { if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); moverBloque(b.esp, e.key === "ArrowUp" ? -1 : 1); } }}
+                                className={`flex h-7 w-5 shrink-0 touch-none items-center justify-center rounded-md text-subtle hover:bg-surface-3 hover:text-fg focus-visible:text-primary ${movida ? "cursor-grabbing text-primary" : `cursor-grab ${AL_PASAR}`}`}>
+                                <Icon name="grip" className="h-4.5 w-4.5" />
                               </button>
-                            </div>
-                          </td>
-                          {O.codes.map((m) => {
-                            const pv = +b.ped[m] || 0; const f = b.falta[m] || 0;
-                            return (
-                              <td key={m} className="px-1 pt-1.5 pb-1 align-top">
-                                <CeldaInput value={pv} mk={m} fuerte label={`Pedido ${b.esp} ${nombreOfi(m)}`} onCommit={(v) => setPed(b.esp, m, v)} />
-                                <div className={`mt-0.5 h-3.5 text-center text-[10px] leading-[14px] font-bold whitespace-nowrap ${f > 0 ? "text-warning" : f < 0 ? "text-danger" : "text-success"}`}>
-                                  {f > 0 ? `falta ${fmt0(f)}` : f < 0 ? `sobra ${fmt0(-f)}` : pv ? "✓ asignado" : ""}
-                                </div>
-                              </td>
-                            );
-                          })}
-                          <td className="px-1 text-center font-bold tabular-nums">{fmt0(b.pt)}</td>
-                          <td className="px-2">
-                            <div className="flex items-center gap-1">
-                              <span className="flex min-w-0 flex-wrap gap-1">
-                                {b.pt === 0 && b.at === 0 ? <Badge>Nueva</Badge> : !b.diff ? <Badge tone="success">Completo</Badge> : <>
-                                  {b.fp > 0 && <Badge tone="warning" className="whitespace-nowrap">Faltan {fmt0(b.fp)}</Badge>}
-                                  {b.fn > 0 && <Badge tone="danger" className="whitespace-nowrap">{fmt0(b.fn)} de más</Badge>}
-                                </>}
-                              </span>
-                              <IconButton label={`Borrar ${b.esp} de esta semana`} icon="trash" size="xs" tone="dangerSolid" className="ml-auto" onClick={() => borrarEspecie(b.esp)} />
-                            </div>
-                          </td>
-                        </tr>
-                        {abierta && b.provs.map((n) => {
-                          const f = b.filas[n]; let t = 0;
+                            ) : <span className="w-5 shrink-0" />}
+                            <button type="button" data-abrir={b.esp} onClick={() => setAbiertas((a) => { const n = { ...a }; if (n[b.esp]) delete n[b.esp]; else n[b.esp] = true; return n; })}
+                              aria-expanded={abierta} title={abierta ? "Ocultar proveedores" : `Ver y editar proveedores (${b.provs.length})`}
+                              className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 pr-1 pl-0.5 text-left hover:text-primary">
+                              <Icon name={abierta ? "chevronDown" : "chevronRight"} className="h-3.5 w-3.5 shrink-0 text-subtle" strokeWidth={2.5} />
+                              <span className="truncate font-semibold text-fg" title={b.esp}>{b.esp}</span>
+                            </button>
+                          </div>
+                        </td>
+                        {O.codes.map((m) => {
+                          const pv = +b.ped[m] || 0; const f = b.falta[m] || 0;
                           return (
-                            <tr key={n} data-prov={n} className="group border-t border-line bg-surface">
-                              <td className="z-[1] bg-surface py-1 pr-2 pl-12 sm:sticky sm:left-0"><span className="block truncate text-fg" title={n}>{n}</span></td>
-                              {O.codes.map((m) => { const v = f[m]?.cajas || 0; t += v; return (
-                                <td key={m} className="px-1 py-1">
-                                  <CeldaInput value={v} mk={m} label={`${n} ${b.esp} ${nombreOfi(m)}`} onCommit={(x) => setCeldaAsig(b.esp, n, m, x)} />
-                                </td>
-                              ); })}
-                              <td className="px-1 text-center font-semibold tabular-nums">{fmt0(t)}</td>
-                              <td className="px-2"><IconButton label={`Quitar ${n} de ${b.esp}`} icon="x" size="xs" tone="danger" onClick={() => quitarProv(b.esp, n)} /></td>
-                            </tr>
+                            <td key={m} title={f > 0 ? `Faltan ${fmt0(f)} por asignar` : f < 0 ? `${fmt0(-f)} asignados de más` : undefined}
+                              className={`relative px-1 py-0.5 ${f > 0 ? "bg-warning-soft" : f < 0 ? "bg-danger-soft" : ""}`}>
+                              <CeldaInput value={pv} mk={m} tono="pedido" delta={f !== 0} label={`Pedido ${b.esp} ${nombreOfi(m)}`} onCommit={(v) => setPed(b.esp, m, v)} />
+                              {f !== 0 && (
+                                <span data-delta className={`pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2 text-[10px] font-bold tabular-nums ${f > 0 ? "text-warning" : "text-danger"}`}>
+                                  {f > 0 ? `−${fmt0(f)}` : `+${fmt0(-f)}`}
+                                </span>
+                              )}
+                            </td>
                           );
                         })}
-                        {abierta && (
-                          <tr className="border-t border-line bg-surface-2">
-                            <td className="z-[1] bg-surface-2 py-1.5 pr-2 pl-12 sm:sticky sm:left-0">
-                              <Combo placeholder="+ Proveedor" ariaLabel={`Agregar proveedor a ${b.esp}`} nav="add"
-                                inputClassName="h-8 w-full rounded-lg border border-dashed border-line-strong bg-surface px-2.5 text-sm text-fg placeholder:text-subtle scroll-mt-16 md:scroll-mt-52 focus:border-solid focus:border-primary focus:outline-none"
-                                getOptions={opcionesProveedor(b.esp, b.provs)} onPick={elegirProveedor(b.esp)} />
-                            </td>
-                            {O.codes.map((m) => { const f = b.falta[m] || 0; return (
-                              <td key={m} className="px-0.5 text-center text-[11px] font-bold whitespace-nowrap">
-                                {f > 0 ? <span className="text-warning">falta {fmt0(f)}</span> : f < 0 ? <span className="text-danger">sobra {fmt0(-f)}</span> : null}
+                        <td className="px-1 text-center whitespace-nowrap tabular-nums">
+                          <span className="font-bold text-fg">{fmt0(b.pt)}</span>
+                          {b.fp > 0 && <span className="ml-1 text-[10px] font-bold text-warning" title={`Faltan ${fmt0(b.fp)} por asignar`}>−{fmt0(b.fp)}</span>}
+                          {b.fn > 0 && <span className="ml-1 text-[10px] font-bold text-danger" title={`${fmt0(b.fn)} asignados de más`}>+{fmt0(b.fn)}</span>}
+                        </td>
+                        <td className="text-center">
+                          <IconButton label={`Borrar ${b.esp} de esta semana`} icon="trash" size="xs" tone="danger" className={AL_PASAR} onClick={() => borrarEspecie(b.esp)} />
+                        </td>
+                      </tr>
+                      {abierta && b.provs.map((n) => {
+                        const f = b.filas[n]; let t = 0;
+                        return (
+                          <tr key={n} data-prov={n} className="group border-t border-line bg-surface hover:bg-surface-2">
+                            <td className="z-[1] bg-surface py-0.5 pr-2 pl-[3.25rem] group-hover:bg-surface-2 sm:sticky sm:left-0"><span className="block truncate text-[13px] text-muted" title={n}>{n}</span></td>
+                            {O.codes.map((m) => { const v = f[m]?.cajas || 0; t += v; return (
+                              <td key={m} className="px-1 py-0.5">
+                                <CeldaInput value={v} mk={m} tono="prov" label={`${n} ${b.esp} ${nombreOfi(m)}`} onCommit={(x) => setCeldaAsig(b.esp, n, m, x)} />
                               </td>
                             ); })}
-                            <td className="px-0.5 text-center text-[11px] font-bold whitespace-nowrap">
-                              {b.fp > 0 ? <span className="text-warning">falta {fmt0(b.fp)}</span> : b.fn > 0 ? <span className="text-danger">sobra {fmt0(b.fn)}</span> : null}
-                            </td>
-                            <td />
+                            <td className="px-1 text-center text-[13px] text-muted tabular-nums">{t ? fmt0(t) : ""}</td>
+                            <td className="text-center"><IconButton label={`Quitar ${n} de ${b.esp}`} icon="x" size="xs" tone="danger" className={AL_PASAR} onClick={() => quitarProv(b.esp, n)} /></td>
                           </tr>
-                        )}
-                      </tbody>
-                    );
-                  })}
-                  <tbody>
-                    <tr className="border-t border-line">
-                      <td colSpan={O.codes.length + 3} className={`px-3 py-2.5 ${M.bloques.length ? "" : "lg:rounded-b-2xl"}`}>
-                        <div className="relative max-w-md">
-                          <Icon name="plus" className="pointer-events-none absolute top-2.5 left-3 h-4 w-4 text-muted" strokeWidth={2.5} />
-                          <Combo placeholder="Agregar especie… escribe para buscar" ariaLabel="Agregar especie" flechasSiempre
-                            inputClassName="field pl-9" getOptions={opcionesEspecie} onPick={elegirEspecie} />
-                        </div>
-                      </td>
+                        );
+                      })}
+                      {abierta && (
+                        <tr className="border-t border-line bg-surface">
+                          <td className="z-[1] bg-surface py-0.5 pr-2 pl-11 sm:sticky sm:left-0">
+                            <Combo placeholder="+ proveedor" ariaLabel={`Agregar proveedor a ${b.esp}`} nav="add" inputClassName={COMBO_QUIETO}
+                              getOptions={opcionesProveedor(b.esp, b.provs)} onPick={elegirProveedor(b.esp)} />
+                          </td>
+                          <td colSpan={O.codes.length + 2} />
+                        </tr>
+                      )}
+                    </tbody>
+                  );
+                })}
+                <tbody>
+                  <tr className="border-t border-line bg-surface">
+                    <td className={`z-[1] bg-surface py-1 pr-2 pl-6 sm:sticky sm:left-0 ${M.bloques.length ? "" : "lg:rounded-bl-2xl"}`}>
+                      <Combo placeholder="+ especie" ariaLabel="Agregar especie" flechasSiempre inputClassName={COMBO_QUIETO}
+                        getOptions={opcionesEspecie} onPick={elegirEspecie} />
+                    </td>
+                    <td colSpan={O.codes.length + 2} />
+                  </tr>
+                </tbody>
+                {M.bloques.length > 0 && (
+                  <tfoot>
+                    <tr className="border-t border-line-strong text-muted">
+                      <td className="z-[1] bg-surface py-1.5 pr-2 pl-12 text-left font-medium sm:sticky sm:left-0">Pedido</td>
+                      {O.codes.map((m) => <td key={m} className="px-1 text-center tabular-nums">{O.cuad[m].pallets ? fmt0(O.cuad[m].pallets) : ""}</td>)}
+                      <td className="px-1 text-center font-bold text-fg tabular-nums">{fmt0(M.pedTot)}</td><td />
                     </tr>
-                  </tbody>
-                  {M.bloques.length > 0 && (
-                    <PieOficinas codes={O.codes} cuad={O.cuad} asgDe={(m) => O.asg[m] || 0} pedTot={M.pedTot} asgTot={M.asgTot}
-                      centro clsPrimera="z-[1] sm:sticky sm:left-0" redondo={cabFija} />
-                  )}
-                </table>
+                    <tr className="border-t border-line text-muted">
+                      <td className={`z-[1] bg-surface py-1.5 pr-2 pl-12 text-left font-medium sm:sticky sm:left-0 ${cabFija ? "lg:rounded-bl-2xl" : ""}`}>Asignado</td>
+                      {O.codes.map((m) => {
+                        const a = O.asg[m] || 0, p = O.cuad[m].pallets;
+                        return <td key={m} title={a !== p ? (a < p ? `Faltan ${fmt0(p - a)} por asignar` : `${fmt0(a - p)} asignados de más`) : undefined}
+                          className={`px-1 text-center tabular-nums ${a < p ? "font-bold text-warning" : a > p ? "font-bold text-danger" : ""}`}>{a ? fmt0(a) : ""}</td>;
+                      })}
+                      <td className={`px-1 text-center font-bold tabular-nums ${M.asgTot < M.pedTot ? "text-warning" : M.asgTot > M.pedTot ? "text-danger" : "text-fg"}`}>{fmt0(M.asgTot)}</td><td />
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+            {M.bloques.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 px-1">
+                <p className="mr-auto text-xs text-subtle">Amarillo = falta asignar · rojo = asignado de más · sin marca = completo.</p>
+                <Button size="sm" variant="danger-ghost" icon="trash" onClick={borrarSemana}>Borrar semana</Button>
               </div>
             )}
           </>
         )}
       </main>
     </div>
-  );
-}
-
-// ── Vista por proveedor: qué y cuánto pedirle a cada uno ─────────────────────
-function VistaProveedor({ asig, semana, ordenar, notify }: { asig: Asig[]; semana: string; ordenar: (a: string[]) => string[]; notify: Notify }) {
-  const [copia, setCopia] = useState<{ prov: string; text: string } | null>(null);
-  const provs: Record<string, Asig[]> = {};
-  for (const a of asig) if (+a.cajas > 0) (provs[a.proveedor] ||= []).push(a);
-  const suma = (l: Asig[]) => l.reduce((s, a) => s + (+a.cajas || 0), 0);
-  const nombres = Object.keys(provs).sort((a, b) => suma(provs[b]) - suma(provs[a]));
-  const texto = (n: string) => {
-    const by: Record<string, Asig[]> = {}; for (const a of provs[n]) (by[a.especie] ||= []).push(a);
-    const filas = ordenar(Object.keys(by)).map((e) => `• ${e}: ${by[e].map((a) => `${a.mercado} ${fmt0(a.cajas)}`).join(", ")} (${fmt0(suma(by[e]))} pallets)`);
-    return `Pedido ${weekShort(semana)} (${weekRange(semana)}) — ${n}\n${filas.join("\n")}\nTotal: ${fmt0(suma(provs[n]))} pallets`;
-  };
-  const copiar = async (n: string) => {
-    const t = texto(n);
-    try { await navigator.clipboard.writeText(t); setCopia(null); notify("success", "Pedido copiado. Pégalo en WhatsApp o correo.", 2500); }
-    catch { setCopia({ prov: n, text: t }); }
-  };
-  if (!nombres.length) return (
-    <section className="rounded-2xl border border-dashed border-line-strong bg-surface px-6 py-12 text-center">
-      <p className="text-base font-semibold text-fg">Sin proveedores asignados.</p>
-      <p className="mt-1 text-sm text-muted">Asígnalos en la vista Pedido: abre una especie y usa “+ Proveedor”.</p>
-    </section>
-  );
-  return (
-    <>
-      <p className="text-sm text-muted">{nombres.length} proveedores con pedido · {weekRange(semana)}</p>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {nombres.map((n) => {
-          const by: Record<string, Asig[]> = {}; for (const a of provs[n]) (by[a.especie] ||= []).push(a);
-          return (
-            <div key={n} className="flex flex-col gap-2 rounded-2xl border border-line bg-surface p-4 shadow-xs">
-              <div className="flex items-baseline justify-between gap-2 border-b border-line pb-2">
-                <span className="truncate font-semibold text-fg">{n}</span>
-                <span className="text-lg font-bold text-primary tabular-nums">{fmt0(suma(provs[n]))}</span>
-              </div>
-              <ul className="space-y-1 text-sm">
-                {ordenar(Object.keys(by)).map((e) => (
-                  <li key={e} className="flex justify-between gap-3"><span>{e}</span><span className="text-right text-muted">{by[e].map((a) => `${a.mercado} ${fmt0(a.cajas)}`).join(" · ")}</span></li>
-                ))}
-              </ul>
-              <Button size="sm" variant="secondary" icon="copy" className="mt-auto self-start" onClick={() => copiar(n)}>Copiar pedido</Button>
-              {copia?.prov === n && <textarea readOnly autoFocus onFocus={(e) => e.currentTarget.select()} className="field h-36 text-xs" value={copia.text} />}
-            </div>
-          );
-        })}
-      </div>
-    </>
   );
 }
 

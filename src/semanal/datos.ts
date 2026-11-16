@@ -126,3 +126,26 @@ export function asigId(especie: string, proveedor: string, mercado: string) {
   for (const ch of `${especie}|${proveedor}|${mercado}`) x = ((x * 33) ^ (ch.codePointAt(0) || 0)) >>> 0;
   return "x" + x.toString(36);
 }
+
+// ── Contenedores ─────────────────────────────────────────────────────────────
+// Un contenedor lleva 21 pallets de manzana o 20 de otra especie y se pueden mezclar
+// especies, así que cada oficina suma pallets/capacidad y se mira si queda en
+// contenedores enteros. Se calcula sobre el PEDIDO de cada oficina.
+export const capacidad = (especie: string) => (familia(especie) === "Manzanas" ? 21 : 20);
+export const fmt1 = (n: number) => n.toLocaleString("es-CL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+export type Cuadratura = { pallets: number; cont: number; necesarios: number; completos: boolean; faltan: number; sobran: number; cap: number };
+
+/** Cuadratura de una oficina a partir de sus pallets por especie. */
+export function cuadrar(porEspecie: Record<string, number>): Cuadratura {
+  let pallets = 0, cont = 0, manz = 0;
+  for (const [e, v] of Object.entries(porEspecie)) {
+    const n = +v || 0; if (n <= 0) continue;
+    pallets += n; cont += n / capacidad(e); if (capacidad(e) === 21) manz += n;
+  }
+  const cap = manz * 2 >= pallets ? 21 : 20;            // capacidad de referencia: la que más pesa
+  const resto = cont - Math.floor(cont + 1e-9);
+  const faltan = resto > 1e-9 ? Math.round((1 - resto) * cap) : 0;
+  const sobran = resto > 1e-9 ? Math.round(resto * cap) : 0;
+  const completos = faltan === 0 || sobran === 0;       // queda a menos de medio pallet de un entero
+  return { pallets, cont, necesarios: completos ? Math.round(cont) : Math.ceil(cont - 1e-9), completos, faltan: completos ? 0 : faltan, sobran: completos ? 0 : sobran, cap };
+}
