@@ -34,6 +34,23 @@ const motivo = (e: unknown, txt: string) => ((e as { code?: string })?.code === 
 const VACIO: Catalogo = { especies: [], mercados: [], proveedores: [] };
 const SEMANA_KEY = "frutam_semanal_semana";
 const ABIERTAS_KEY = "frutam_semanal_abiertas";
+// Filas sin cantidades todavía (especies y proveedores agregados o copiados de otra semana).
+// Firestore solo guarda lo que tiene pallets, así que estas filas se recuerdan en este equipo.
+const FILAS_KEY = "frutam_semanal_filas";
+type FilasEsp = Record<string, string[]>;
+type FilasProv = Record<string, Record<string, string[]>>;
+const leerFilas = (): { esp: FilasEsp; prov: FilasProv } => {
+  try {
+    const x = JSON.parse(safeGet(FILAS_KEY) || "{}") || {};
+    const esp: FilasEsp = {}; const prov: FilasProv = {};
+    for (const [w, l] of Object.entries(x.esp || {})) if (Array.isArray(l)) esp[w] = l.filter((e) => typeof e === "string");
+    for (const [w, o] of Object.entries(x.prov || {})) if (o && typeof o === "object") {
+      prov[w] = {};
+      for (const [e, l] of Object.entries(o as Record<string, unknown>)) if (Array.isArray(l)) prov[w][e] = l.filter((n) => typeof n === "string");
+    }
+    return { esp, prov };
+  } catch { return { esp: {}, prov: {} }; }
+};
 const safeGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
 const safeSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* sin almacenamiento */ } };
 const clonar = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
@@ -154,8 +171,16 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
   const [semOk, setSemOk] = useState(false);
   const [asig, setAsig] = useState<Asig[]>([]);
   const [asigOk, setAsigOk] = useState(false);
-  const [extraEsp, setExtraEsp] = useState<Record<string, string[]>>({});
-  const [extraProv, setExtraProv] = useState<Record<string, Record<string, string[]>>>({});
+  const [extraEsp, setExtraEsp] = useState<FilasEsp>(() => leerFilas().esp);
+  const [extraProv, setExtraProv] = useState<FilasProv>(() => leerFilas().prov);
+  useEffect(() => {
+    const ws = [...new Set([...Object.keys(extraEsp), ...Object.keys(extraProv)])].sort().slice(-12); // últimas 12 semanas
+    safeSet(FILAS_KEY, JSON.stringify({
+      esp: Object.fromEntries(ws.filter((w) => extraEsp[w]?.length).map((w) => [w, extraEsp[w]])),
+      prov: Object.fromEntries(ws.filter((w) => Object.values(extraProv[w] || {}).some((l) => l.length)).map((w) => [w, extraProv[w]])),
+    }));
+  }, [extraEsp, extraProv]);
+  const [copiando, setCopiando] = useState(false);
   const [pendientes, setPendientes] = useState(0);
   const [errorGuardar, setErrorGuardar] = useState(false);
   const [aviso, setAviso] = useState("");
@@ -289,6 +314,30 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
     setExtraEsp((x) => ({ ...x, [s]: [] })); setExtraProv((x) => ({ ...x, [s]: {} }));
     enqueue(async () => { if (ids.length) await store.borrarAsig(s, ids); await store.borrarSemana(s); })
       .then(() => notify("success", `Semana ${weekShort(s)} borrada`, 2500));
+  };
+
+  // ── Copiar especies y proveedores (sin cantidades) de la última semana con datos ──
+  const semanaOrigen = useMemo(() => {
+    const prev = Object.keys(semanas).filter((w) => w < semana).sort().reverse();
+    const conPedido = (w: string) => Object.values(semanas[w]?.pedido || {}).some((r) => Object.values(r || {}).some((v) => +v > 0));
+    return prev.find(conPedido) || prev[0] || "";
+  }, [semanas, semana]);
+  const copiarEstructura = async () => {
+    const src = semanaOrigen, dst = semana; if (!src || copiando) return;
+    setCopiando(true);
+    try {
+      const lista = (await store.listAsig(src)).filter((a) => +a.cajas > 0);
+      const ped = semanasRef.current[src]?.pedido || {};
+      const esps = [...new Set([...Object.keys(ped).filter((e) => Object.values(ped[e] || {}).some((v) => +v > 0)), ...lista.map((a) => a.especie)])];
+      if (!esps.length) { notify("info", `${weekShort(src)} no tiene especies ni proveedores para copiar.`, 4000); return; }
+      const provs: Record<string, string[]> = {};
+      for (const a of lista) { const l = (provs[a.especie] ||= []); if (!l.includes(a.proveedor)) l.push(a.proveedor); }
+      setExtraEsp((x) => ({ ...x, [dst]: [...new Set([...(x[dst] || []), ...esps])] }));
+      setExtraProv((x) => { const w = { ...(x[dst] || {}) }; for (const [e, l] of Object.entries(provs)) w[e] = [...new Set([...(w[e] || []), ...l])]; return { ...x, [dst]: w }; });
+      setAbiertas((a) => ({ ...a, ...Object.fromEntries(esps.map((e) => [e, true])) }));
+      notify("success", `Se copiaron ${esps.length} especies y sus proveedores de ${weekShort(src)}, sin cantidades.`, 5000);
+    } catch (e) { console.error(e); notify("error", motivo(e, `No se pudo leer ${weekShort(src)}.`), 6000); }
+    finally { setCopiando(false); }
   };
 
   // ── Renombrar / unir (se aplica en todas las semanas guardadas) ─────────────
@@ -589,6 +638,10 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
               </span>
               {cruce === "editar" && M.bloques.length > 0 && (
                 <div className="ml-auto flex flex-wrap items-center gap-1 lg:ml-0">
+                  {semanaOrigen && (
+                    <Button size="sm" variant="ghost" icon="duplicate" disabled={copiando} onClick={copiarEstructura}
+                      title={`Agrega las especies y proveedores de ${weekShort(semanaOrigen)} que falten aquí, sin cantidades`}>Copiar de {weekShort(semanaOrigen)}</Button>
+                  )}
                   <Button size="sm" variant="ghost" onClick={() => setAbiertas(Object.fromEntries(M.bloques.map((b) => [b.esp, true])))}>Abrir todo</Button>
                   <Button size="sm" variant="ghost" onClick={() => setAbiertas({})}>Cerrar todo</Button>
                   <Button size="sm" variant="danger-ghost" icon="trash" onClick={borrarSemana}>Borrar semana</Button>
@@ -618,7 +671,12 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
                     <tbody>
                       <tr><td colSpan={O.codes.length + 3} className="px-6 py-10 text-center">
                         <p className="text-base font-semibold text-fg">Sin pedido para {weekShort(semana)}.</p>
-                        <p className="mt-1 text-sm text-muted">Agrega la primera especie con el buscador de abajo.</p>
+                        {semanaOrigen ? <>
+                          <p className="mt-1 text-sm text-muted">Parte con las mismas especies y proveedores de {weekShort(semanaOrigen)} (sin cantidades) o agrega la primera especie con el buscador de abajo.</p>
+                          <Button className="mt-4" variant="primary" icon="duplicate" disabled={copiando} onClick={copiarEstructura}>
+                            Copiar especies y proveedores de {weekShort(semanaOrigen)}
+                          </Button>
+                        </> : <p className="mt-1 text-sm text-muted">Agrega la primera especie con el buscador de abajo.</p>}
                       </td></tr>
                     </tbody>
                   )}

@@ -180,7 +180,9 @@ const db = getFirestore(app);
 //  v57.0 Pedidos semanales: el pedido se arma en una sola tabla editable (Especie × Oficina):
 //        cada especie es una fila con el pedido por oficina y lo que falta asignar; al abrirla
 //        se editan sus proveedores. Reemplaza las vistas "Por especie" y "Resumen".
-const APP_VERSION = "v57.0";
+//  v57.1 Pedidos semanales: "Copiar especies y proveedores" de la última semana con datos
+//        (sin cantidades); las filas aún sin pallets se recuerdan en el equipo.
+const APP_VERSION = "v57.1";
 const APP_VERSION_DATE = "16 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
