@@ -197,7 +197,10 @@ const db = getFirestore(app);
 //        completos, pallets sueltos): una, varias, todas o ninguna. Se recuerda en el equipo.
 //  v58.6 "+ Agregar especie" un poco más visible (borde punteado).
 //  v58.7 "+ Agregar proveedor" con el mismo estilo que "+ Agregar especie".
-const APP_VERSION = "v58.7";
+//  v58.8 Flechas como en una planilla: ← → siempre pasan a la celda vecina (F2 o segundo clic
+//        para editar dentro del número), Esc deshace; los buscadores "+ Agregar" ya no abren
+//        su lista al pasar con las flechas (se abre al hacer clic, escribir o Alt+↓).
+const APP_VERSION = "v58.8";
 const APP_VERSION_DATE = "16 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;

@@ -57,6 +57,9 @@ const clonar = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
 
 // ── Celda numérica: edita local, guarda al salir ─────────────────────────────
 // Sin caja a la vista: el borde aparece al pasar el mouse y al escribir.
+// Como en una planilla: al llegar a la celda se selecciona todo y las flechas pasan a
+// la celda vecina. Un segundo clic o F2 entra a "editar" (data-edit): ahí ← → mueven
+// el cursor dentro del número. Esc deshace lo digitado.
 function CeldaInput({ value, onCommit, label, mk, tono }: { value: number; onCommit: (v: number) => void; label: string; mk: string; tono: "pedido" | "prov" }) {
   const [txt, setTxt] = useState(fmt(value));
   const foco = useRef(false);
@@ -71,23 +74,35 @@ function CeldaInput({ value, onCommit, label, mk, tono }: { value: number; onCom
       value={txt}
       className={`cell-input scroll-mt-16 scroll-mb-6 tabular-nums md:scroll-mt-44 ${tono === "prov" ? "text-[13px] text-muted" : "text-fg-2"}`}
       onFocus={(e) => { foco.current = true; recienEnfocada.current = true; e.currentTarget.select(); }}
-      onMouseUp={(e) => { if (recienEnfocada.current) { e.preventDefault(); recienEnfocada.current = false; } }}
+      onMouseUp={(e) => { if (recienEnfocada.current) { e.preventDefault(); recienEnfocada.current = false; } else e.currentTarget.dataset.edit = "1"; }}
       onChange={(e) => { recienEnfocada.current = false; setTxt(e.target.value); }}
-      onKeyDown={() => { recienEnfocada.current = false; }}
-      onBlur={() => { foco.current = false; recienEnfocada.current = false; const v = parseCajas(txt); if (v !== (value || 0)) onCommit(v); setTxt(fmt(v)); }}
+      onKeyDown={(e) => {
+        recienEnfocada.current = false;
+        const el = e.currentTarget;
+        if (e.key === "F2") { e.preventDefault(); el.dataset.edit = "1"; el.setSelectionRange(el.value.length, el.value.length); }
+        else if (e.key === "Escape" && txt !== fmt(value)) {
+          e.preventDefault(); setTxt(fmt(value)); delete el.dataset.edit;
+          requestAnimationFrame(() => { if (document.activeElement === el) el.select(); });
+        }
+      }}
+      onBlur={(e) => { foco.current = false; recienEnfocada.current = false; delete e.currentTarget.dataset.edit; const v = parseCajas(txt); if (v !== (value || 0)) onCommit(v); setTxt(fmt(v)); }}
     />
   );
 }
 
 // ── Buscador con lista (agregar especie / proveedor) ─────────────────────────
-function Combo({ placeholder, getOptions, onPick, inputClassName, ariaLabel, nav, flechasSiempre }: {
+// La lista se abre al hacer clic, al escribir o con Alt+↓. Si se llega con las flechas
+// queda cerrada y ↑ ↓ siguen de largo por la tabla; con la lista abierta, ↑ ↓ eligen.
+function Combo({ placeholder, getOptions, onPick, inputClassName, ariaLabel, nav }: {
   placeholder: string; getOptions: (q: string) => Opt[]; onPick: (o: Opt) => void; inputClassName: string;
-  ariaLabel: string; nav?: string; flechasSiempre?: boolean;
+  ariaLabel: string; nav?: string;
 }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [idx, setIdx] = useState(0);
   const ref = useRef<HTMLInputElement>(null);
+  const porPuntero = useRef(false);   // el foco llegó con clic o toque (no con el teclado)
+  const movio = useRef(false);        // se movió por la lista con las flechas
   const [pos, setPos] = useState<{ left: number; top: number; bottom: number; width: number; up: boolean } | null>(null);
   const opts = open ? getOptions(q) : [];
   const ubicar = useCallback(() => {
@@ -104,12 +119,14 @@ function Combo({ placeholder, getOptions, onPick, inputClassName, ariaLabel, nav
   const elegir = (o: Opt) => { setQ(""); setIdx(0); setOpen(false); onPick(o); };
   const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") { if (open || q) { e.preventDefault(); setQ(""); setOpen(false); } return; }
-    if (!q.trim() && !flechasSiempre) return; // vacío: las flechas navegan la grilla
+    if (e.key === "ArrowDown" && e.altKey && !open) { e.preventDefault(); movio.current = false; setIdx(0); setOpen(true); return; }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      if (!opts.length) return; e.preventDefault();
+      if (!open || !opts.length) return;           // lista cerrada: las flechas siguen por la tabla
+      e.preventDefault(); movio.current = true;
       setIdx((i) => (i + (e.key === "ArrowDown" ? 1 : -1) + opts.length) % opts.length);
     } else if (e.key === "Enter") {
-      e.preventDefault(); if (!q.trim()) return;
+      if (!open || !opts.length) return;
+      e.preventDefault(); if (!q.trim() && !movio.current) return;   // nada escrito ni elegido: no agrega por accidente
       const o = opts[Math.min(idx, opts.length - 1)]; if (o) elegir(o);
     }
   };
@@ -118,9 +135,11 @@ function Combo({ placeholder, getOptions, onPick, inputClassName, ariaLabel, nav
       <input
         ref={ref} value={q} placeholder={placeholder} aria-label={ariaLabel} autoComplete="off" role="combobox"
         aria-expanded={open && opts.length > 0} data-nav={nav} className={inputClassName}
-        onFocus={() => { setOpen(true); setIdx(0); }}
-        onBlur={() => setOpen(false)}
-        onChange={(e) => { setQ(e.target.value); setOpen(true); setIdx(0); }}
+        onMouseDown={() => { porPuntero.current = true; }}
+        onFocus={() => { movio.current = false; setIdx(0); if (porPuntero.current) setOpen(true); porPuntero.current = false; }}
+        onClick={() => setOpen(true)}
+        onBlur={() => { setOpen(false); setQ(""); porPuntero.current = false; }}
+        onChange={(e) => { setQ(e.target.value); setOpen(true); setIdx(0); movio.current = false; }}
         onKeyDown={onKey}
       />
       {open && opts.length > 0 && pos && ReactDOM.createPortal(
@@ -506,12 +525,12 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
   };
 
   // ── Navegación con teclado en la grilla ─────────────────────────────────────
+  const ultimaCol = useRef("");   // columna (oficina) de la última celda visitada, para ↑ ↓
   const irA = (el: Element | null | undefined) => {
     if (!(el instanceof HTMLInputElement)) return;
     el.focus(); el.scrollIntoView({ block: "nearest" });
-    if (el.dataset.nav === "cell") el.select();
+    if (el.dataset.nav === "cell") { el.select(); ultimaCol.current = el.dataset.mk || ultimaCol.current; }
   };
-  const ultimaCol = useRef("");
   const onGridKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const t = e.target as HTMLInputElement;
     if (e.defaultPrevented || !t.dataset || !t.dataset.nav || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
@@ -520,8 +539,10 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
     if (e.key === "Enter" && esCelda) { e.preventDefault(); irA(todos[todos.indexOf(t) + 1]); return; }
     if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       if (!esCelda) return;
-      const a = t.selectionStart ?? 0, z = t.selectionEnd ?? 0, L = t.value.length; const todo = a === 0 && z === L;
-      if (!todo && ((e.key === "ArrowLeft" && a > 0) || (e.key === "ArrowRight" && z < L))) return;
+      if (t.dataset.edit) {   // editando dentro del número (segundo clic o F2): solo sale por los bordes
+        const a = t.selectionStart ?? 0, z = t.selectionEnd ?? 0, L = t.value.length;
+        if ((e.key === "ArrowLeft" && a > 0) || (e.key === "ArrowRight" && z < L)) return;
+      }
       const fila = [...tr.querySelectorAll<HTMLInputElement>("input[data-nav='cell']")];
       e.preventDefault(); irA(fila[fila.indexOf(t) + (e.key === "ArrowRight" ? 1 : -1)]); return;
     }
@@ -854,7 +875,7 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                 <tbody>
                   <tr className="border-t border-line bg-surface">
                     <td className={`z-[1] bg-surface py-2 pr-2 pl-6 sm:sticky sm:left-0 ${M.bloques.length && filasPie.length ? "" : "lg:rounded-bl-2xl"}`}>
-                      <Combo placeholder="+ Agregar especie" ariaLabel="Agregar especie" flechasSiempre inputClassName={COMBO_AGREGAR}
+                      <Combo placeholder="+ Agregar especie" ariaLabel="Agregar especie" nav="add" inputClassName={COMBO_AGREGAR}
                         getOptions={opcionesEspecie} onPick={elegirEspecie} />
                     </td>
                     <td colSpan={O.codes.length + 3} />
