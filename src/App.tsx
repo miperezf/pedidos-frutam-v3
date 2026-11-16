@@ -182,7 +182,8 @@ const db = getFirestore(app);
 //        se editan sus proveedores. Reemplaza las vistas "Por especie" y "Resumen".
 //  v57.1 Pedidos semanales: "Copiar especies y proveedores" de la última semana con datos
 //        (sin cantidades); las filas aún sin pallets se recuerdan en el equipo.
-const APP_VERSION = "v57.1";
+//  v57.2 El botón de copiar solo aparece al iniciar una semana vacía.
+const APP_VERSION = "v57.2";
 const APP_VERSION_DATE = "16 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;

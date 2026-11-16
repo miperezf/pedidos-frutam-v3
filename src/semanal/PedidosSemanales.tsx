@@ -638,10 +638,6 @@ export default function PedidosSemanales({ store, notify }: { store: SemanalStor
               </span>
               {cruce === "editar" && M.bloques.length > 0 && (
                 <div className="ml-auto flex flex-wrap items-center gap-1 lg:ml-0">
-                  {semanaOrigen && (
-                    <Button size="sm" variant="ghost" icon="duplicate" disabled={copiando} onClick={copiarEstructura}
-                      title={`Agrega las especies y proveedores de ${weekShort(semanaOrigen)} que falten aquí, sin cantidades`}>Copiar de {weekShort(semanaOrigen)}</Button>
-                  )}
                   <Button size="sm" variant="ghost" onClick={() => setAbiertas(Object.fromEntries(M.bloques.map((b) => [b.esp, true])))}>Abrir todo</Button>
                   <Button size="sm" variant="ghost" onClick={() => setAbiertas({})}>Cerrar todo</Button>
                   <Button size="sm" variant="danger-ghost" icon="trash" onClick={borrarSemana}>Borrar semana</Button>
