@@ -193,7 +193,9 @@ const db = getFirestore(app);
 //  v58.4 Las celdas del pedido ya no se pintan: estado de asignación en texto al final de la fila
 //        y fila "Falta" al abrir la especie; contenedores completos y pallets sueltos al pie;
 //        botón Abrir todo / Cerrar todo más visible.
-const APP_VERSION = "v58.4";
+//  v58.5 Menú "Totales": elegir qué filas del pie se ven (pedido, asignado, contenedores
+//        completos, pallets sueltos): una, varias, todas o ninguna. Se recuerda en el equipo.
+const APP_VERSION = "v58.5";
 const APP_VERSION_DATE = "16 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;

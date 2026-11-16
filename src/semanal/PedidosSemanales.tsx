@@ -142,6 +142,82 @@ function Combo({ placeholder, getOptions, onPick, inputClassName, ariaLabel, nav
 // Controles que solo se ven al pasar el mouse por la fila (siempre visibles en pantallas táctiles)
 const AL_PASAR = "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100";
 const COMBO_QUIETO = "h-7 w-full rounded-md border border-transparent bg-transparent px-1.5 text-[13px] text-fg placeholder:text-subtle scroll-mt-16 md:scroll-mt-44 hover:border-line focus:border-primary focus:bg-surface focus:ring-2 focus:ring-primary/20 focus:outline-none";
+// Filas de totales al pie de la tabla: se eligen en el menú "Totales" y se recuerdan en el equipo
+const TOTALES = [
+  { id: "pedido", label: "Pedido", desc: "Pallets pedidos por oficina" },
+  { id: "asignado", label: "Asignado", desc: "Pallets asignados a proveedores" },
+  { id: "contenedores", label: "Contenedores completos", desc: "21 pallets de manzana o 20 de otra especie" },
+  { id: "sueltos", label: "Pallets sueltos", desc: "Los que no alcanzan a llenar otro contenedor" },
+] as const;
+type TotalId = typeof TOTALES[number]["id"];
+type TotalesVis = Record<TotalId, boolean>;
+const TOTALES_KEY = "frutam_semanal_totales";
+const leerTotales = (): TotalesVis => {
+  const v = { pedido: true, asignado: true, contenedores: true, sueltos: true };
+  try { const x = JSON.parse(safeGet(TOTALES_KEY) || "{}") || {}; for (const t of TOTALES) if (typeof x[t.id] === "boolean") v[t.id] = x[t.id]; } catch { /* valores por defecto */ }
+  return v;
+};
+
+function MenuTotales({ valor, onChange }: { valor: TotalesVis; onChange: (v: TotalesVis) => void }) {
+  const [open, setOpen] = useState(false);
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; width: number; top: number; bottom: number; up: boolean } | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const ubicar = () => {
+      const r = btn.current?.getBoundingClientRect(); if (!r) return;
+      const width = Math.min(320, window.innerWidth - 16);
+      const left = Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8));
+      setPos({ left, width, top: r.bottom + 4, bottom: window.innerHeight - r.top + 4, up: window.innerHeight - r.bottom < 300 });
+    };
+    ubicar();
+    const fuera = (e: MouseEvent) => { const t = e.target as Node; if (!pop.current?.contains(t) && !btn.current?.contains(t)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { setOpen(false); btn.current?.focus(); } };
+    window.addEventListener("scroll", ubicar, true); window.addEventListener("resize", ubicar);
+    document.addEventListener("mousedown", fuera); document.addEventListener("keydown", esc);
+    return () => {
+      window.removeEventListener("scroll", ubicar, true); window.removeEventListener("resize", ubicar);
+      document.removeEventListener("mousedown", fuera); document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+  const n = TOTALES.filter((t) => valor[t.id]).length;
+  const todas = (on: boolean) => onChange({ pedido: on, asignado: on, contenedores: on, sueltos: on });
+  const enlace = "rounded px-1.5 py-0.5 text-xs font-semibold text-primary hover:bg-primary-soft";
+  return (
+    <>
+      <button ref={btn} type="button" onClick={() => setOpen((o) => !o)} aria-haspopup="true" aria-expanded={open} data-menu-totales
+        title="Elegir qué filas de totales se ven al pie de la tabla"
+        className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-semibold transition-colors ${open ? "border-primary-line bg-primary-soft text-primary" : "border-line-strong bg-surface text-fg-2 hover:bg-surface-2"}`}>
+        Totales <span className="font-normal text-muted">{n === TOTALES.length ? "todos" : n === 0 ? "ocultos" : `${n} de ${TOTALES.length}`}</span>
+        <Icon name={open ? "chevronUp" : "chevronDown"} className="h-3.5 w-3.5" strokeWidth={2.5} />
+      </button>
+      {open && pos && ReactDOM.createPortal(
+        <div ref={pop} role="group" aria-label="Filas de totales" className="fixed z-[70] rounded-xl border border-line bg-surface p-1.5 shadow-2xl"
+          style={{ left: pos.left, width: pos.width, ...(pos.up ? { bottom: pos.bottom } : { top: pos.top }) }}>
+          <p className="px-2.5 pt-1.5 pb-1 text-[11px] font-semibold tracking-wide text-muted uppercase">Filas al pie de la tabla</p>
+          {TOTALES.map((t) => (
+            <div key={t.id} className="flex items-center gap-1 rounded-lg hover:bg-surface-2">
+              <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 px-2.5 py-1.5">
+                <input type="checkbox" checked={valor[t.id]} onChange={(e) => onChange({ ...valor, [t.id]: e.target.checked })} className="h-4 w-4 shrink-0 accent-[var(--color-primary)]" />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-fg">{t.label}</span>
+                  <span className="block truncate text-[11px] text-muted">{t.desc}</span>
+                </span>
+              </label>
+              <button type="button" onClick={() => onChange({ pedido: false, asignado: false, contenedores: false, sueltos: false, [t.id]: true })}
+                title={`Ver solo ${t.label}`} className={`mr-1.5 ${enlace}`}>solo</button>
+            </div>
+          ))}
+          <div className="mt-1 flex items-center justify-between border-t border-line px-1 pt-1.5 pb-0.5">
+            <button type="button" onClick={() => todas(true)} className={enlace}>Ver todas</button>
+            <button type="button" onClick={() => todas(false)} className={enlace}>Ocultar todas</button>
+          </div>
+        </div>, document.body)}
+    </>
+  );
+}
+
 const mayusInicial = (x: string) => x.charAt(0).toLocaleUpperCase("es") + x.slice(1);
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -172,6 +248,8 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
   }, [full]);
   const [abiertas, setAbiertas] = useState<Record<string, boolean>>(() => { try { return JSON.parse(safeGet(ABIERTAS_KEY) || "{}") || {}; } catch { return {}; } });
   useEffect(() => { safeSet(ABIERTAS_KEY, JSON.stringify(abiertas)); }, [abiertas]);
+  const [totales, setTotales] = useState<TotalesVis>(leerTotales);
+  useEffect(() => { safeSet(TOTALES_KEY, JSON.stringify(totales)); }, [totales]);
   const [barH, setBarH] = useState(64);
   const barraRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -622,6 +700,7 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
   const contDe = (m: string) => { const q = O.cuad[m]; return q.completos ? q.necesarios : q.necesarios - 1; };
   const sueltosDe = (m: string) => { const q = O.cuad[m]; return q.completos ? 0 : q.sobran; };
   const contTot = O.codes.reduce((t, m) => t + contDe(m), 0);
+  const filasPie = TOTALES.filter((t) => totales[t.id]);
   const alternarTodas = () => setAbiertas(todasAbiertas ? {} : Object.fromEntries(M.bloques.map((b) => [b.esp, true])));
   // Estado de la asignación de una especie: en texto, sin pintar las celdas del pedido
   const estadoAsig = (b: Bloque) => {
@@ -773,46 +852,41 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                 })}
                 <tbody>
                   <tr className="border-t border-line bg-surface">
-                    <td className={`z-[1] bg-surface py-1 pr-2 pl-6 sm:sticky sm:left-0 ${M.bloques.length ? "" : "lg:rounded-bl-2xl"}`}>
+                    <td className={`z-[1] bg-surface py-1 pr-2 pl-6 sm:sticky sm:left-0 ${M.bloques.length && filasPie.length ? "" : "lg:rounded-bl-2xl"}`}>
                       <Combo placeholder="+ especie" ariaLabel="Agregar especie" flechasSiempre inputClassName={COMBO_QUIETO}
                         getOptions={opcionesEspecie} onPick={elegirEspecie} />
                     </td>
                     <td colSpan={O.codes.length + 3} />
                   </tr>
                 </tbody>
-                {M.bloques.length > 0 && (
+                {M.bloques.length > 0 && filasPie.length > 0 && (
                   <tfoot>
-                    <tr className="border-t border-line-strong text-muted">
-                      <td className="z-[1] bg-surface py-1.5 pr-2 pl-3 text-left font-medium sm:sticky sm:left-0 sm:pl-12">Pedido</td>
-                      {O.codes.map((m) => <td key={m} className="px-1 text-center tabular-nums">{O.cuad[m].pallets ? fmt0(O.cuad[m].pallets) : ""}</td>)}
-                      <td className="px-1 text-center font-bold tabular-nums">{fmt0(M.pedTot)}</td><td colSpan={2} />
-                    </tr>
-                    <tr className="border-t border-line text-muted">
-                      <td className="z-[1] bg-surface py-1.5 pr-2 pl-3 text-left font-medium sm:sticky sm:left-0 sm:pl-12">Asignado</td>
-                      {O.codes.map((m) => <td key={m} className="px-1 text-center tabular-nums">{O.asg[m] ? fmt0(O.asg[m]) : ""}</td>)}
-                      <td className="px-1 text-center font-bold tabular-nums">{fmt0(M.asgTot)}</td><td colSpan={2} />
-                    </tr>
-                    <tr data-cont className="border-t border-line-strong text-muted">
-                      <td className="z-[1] bg-surface py-1.5 pr-2 pl-3 text-left font-medium sm:sticky sm:left-0 sm:pl-12" title="Contenedores que el pedido de la oficina llena completos (21 pallets de manzana o 20 de otra especie)">Contenedores completos</td>
-                      {O.codes.map((m) => <td key={m} className="px-1 text-center font-semibold text-fg tabular-nums">{O.cuad[m].pallets ? contDe(m) : ""}</td>)}
-                      <td className="px-1 text-center font-bold text-fg tabular-nums">{contTot}</td><td colSpan={2} />
-                    </tr>
-                    <tr data-sueltos className="border-t border-line text-muted">
-                      <td className={`z-[1] bg-surface py-1.5 pr-2 pl-3 text-left font-medium sm:sticky sm:left-0 sm:pl-12 ${cabFija ? "lg:rounded-bl-2xl" : ""}`} title="Pallets del pedido que no alcanzan a llenar otro contenedor">Pallets sueltos</td>
-                      {O.codes.map((m) => {
-                        const q = O.cuad[m]; const su = sueltosDe(m);
-                        return <td key={m} title={su ? `Faltan ${q.faltan} pallets para completar otro contenedor (de ${q.cap} pallets)` : undefined}
-                          className={`px-1 text-center tabular-nums ${su ? "font-semibold text-warning" : "text-subtle"}`}>{q.pallets ? su : ""}</td>;
-                      })}
-                      <td colSpan={3} />
-                    </tr>
+                    {filasPie.map((f, k) => (
+                      <tr key={f.id} data-total={f.id} className={`text-muted ${f.id === filasPie[0].id || f.id === "contenedores" ? "border-t border-line-strong" : "border-t border-line"}`}>
+                        <td title={f.desc} className={`z-[1] bg-surface py-1.5 pr-2 pl-3 text-left font-medium sm:sticky sm:left-0 sm:pl-12 ${cabFija && k === filasPie.length - 1 ? "lg:rounded-bl-2xl" : ""}`}>{f.label}</td>
+                        {O.codes.map((m) => {
+                          const q = O.cuad[m];
+                          if (f.id === "pedido") return <td key={m} className="px-1 text-center tabular-nums">{q.pallets ? fmt0(q.pallets) : ""}</td>;
+                          if (f.id === "asignado") return <td key={m} className="px-1 text-center tabular-nums">{O.asg[m] ? fmt0(O.asg[m]) : ""}</td>;
+                          if (f.id === "contenedores") return <td key={m} className="px-1 text-center font-semibold text-fg tabular-nums">{q.pallets ? contDe(m) : ""}</td>;
+                          const su = sueltosDe(m);
+                          return <td key={m} title={su ? `Faltan ${q.faltan} pallets para completar otro contenedor (de ${q.cap} pallets)` : undefined}
+                            className={`px-1 text-center tabular-nums ${su ? "font-semibold text-warning" : "text-subtle"}`}>{q.pallets ? su : ""}</td>;
+                        })}
+                        <td className={`px-1 text-center font-bold tabular-nums ${f.id === "contenedores" ? "text-fg" : ""}`}>
+                          {f.id === "pedido" ? fmt0(M.pedTot) : f.id === "asignado" ? fmt0(M.asgTot) : f.id === "contenedores" ? contTot : ""}
+                        </td>
+                        <td colSpan={2} />
+                      </tr>
+                    ))}
                   </tfoot>
                 )}
               </table>
             </div>
             {M.bloques.length > 0 && (
-              <div className="flex items-start gap-3 px-1">
-                <p className="min-w-0 flex-1 pt-1.5 text-xs text-subtle">La fila de cada especie es el pedido por oficina; ábrela para asignar proveedores. Pallets sueltos = los que no alcanzan a llenar un contenedor (21 de manzana, 20 de otras especies).</p>
+              <div className="flex flex-wrap items-start justify-end gap-x-3 gap-y-2 px-1">
+                <p className="min-w-0 basis-full text-xs text-subtle sm:basis-0 sm:flex-1 sm:pt-1.5">La fila de cada especie es el pedido por oficina; ábrela para asignar proveedores. Pallets sueltos = los que no alcanzan a llenar un contenedor (21 de manzana, 20 de otras especies).</p>
+                <MenuTotales valor={totales} onChange={setTotales} />
                 <Button size="sm" variant="danger-ghost" icon="trash" onClick={borrarSemana}>Borrar semana</Button>
               </div>
             )}
