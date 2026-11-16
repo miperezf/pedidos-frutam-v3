@@ -200,9 +200,10 @@ const db = getFirestore(app);
 //  v58.8 Flechas como en una planilla: ← → siempre pasan a la celda vecina (F2 o segundo clic
 //        para editar dentro del número), Esc deshace; los buscadores "+ Agregar" ya no abren
 //        su lista al pasar con las flechas (se abre al hacer clic, escribir o Alt+↓).
-const APP_VERSION = "v58.8";
+//  v58.9 modal de novedades v58 (menú, Pedidos semanales y sugerencias al escribir).
+const APP_VERSION = "v58.9";
 const APP_VERSION_DATE = "16 Nov 2026";
-const WHATSNEW_VERSION = "v55";
+const WHATSNEW_VERSION = "v58";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
 // v51.7: etiqueta de entorno inyectada por vite.config.ts ("" en producción)
 const ENV_LABEL = typeof __ENV_LABEL__ !== "undefined" ? __ENV_LABEL__ : "";
@@ -4172,12 +4173,13 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
       >
         <ul className="space-y-4">
           {[
-            { icon: "sparkles", title: "Nueva interfaz", desc: "Diseño más limpio, modo oscuro y pestañas para moverte entre los pedidos del mismo Mail ID." },
-            { icon: "building", title: "Compras directas", desc: "Botón «Directo» junto a Exporta: eliges la oficina (y el puerto en Costa Rica) y el correo incluye las fichas Consignee y Notify." },
-            { icon: "send", title: "Correo renovado", desc: "Tabla más clara y tamaños estándar. Al pegarlo en Outlook puedes escribir el saludo encima sin que tome el formato del pedido." },
-            { icon: "clock", title: "Se guarda al enviar", desc: "Lo que armas queda en pantalla y se guarda en la base solo al enviar, todo junto. Si cierras sin enviar, el navegador te avisa." },
-            { icon: "checkCircle", title: "Un proveedor y un Incoterm por Mail ID", desc: "Al cambiar el proveedor o FOB/FOT en un pedido, se aplica a todos los pedidos del mismo Mail ID." },
-            { icon: "lock", title: "Acceso con código", desc: "La app pide un código una sola vez por equipo. El aviso «también está editando» indica qué equipo es, y en tu perfil puedes cerrar sesión." },
+            { icon: "menu", title: "Menú de secciones", desc: "El botón ☰ de arriba a la izquierda abre el menú para pasar entre Pedidos por Mail ID y la nueva sección Pedidos semanales." },
+            { icon: "table", title: "Pedidos semanales", desc: "Una tabla por semana: en la fila de cada especie digitas el pedido por oficina y, al abrirla, asignas los pallets a cada proveedor. Cada cambio se guarda al momento." },
+            { icon: "duplicate", title: "Partir desde la semana anterior", desc: "En una semana vacía puedes copiar las especies y proveedores de la última semana con datos, sin cantidades." },
+            { icon: "checkCircle", title: "Asignación y contenedores", desc: "Al final de cada fila ves si falta asignar. Al pie, los contenedores completos y los pallets sueltos de cada oficina; el menú «Totales» elige qué filas mostrar." },
+            { icon: "users", title: "Proveedores", desc: "Consulta cuánto se compra a cada proveedor, por oficina o por especie." },
+            { icon: "expand", title: "Teclado y pantalla completa", desc: "Te mueves entre celdas con las flechas y Enter como en una planilla, ordenas las especies arrastrando ⠿ y amplías la tabla con el botón de pantalla completa." },
+            { icon: "bulb", title: "Sugerencias al escribir", desc: "En Pedidos por Mail ID, los campos proponen lo usado en los pedidos enviados de los últimos 90 días: proveedor, país, nave, especie, variedad y más." },
           ].map(({ icon, title, desc }) => (
             <li key={title} className="flex items-start gap-3">
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary-soft text-primary"><Icon name={icon} className="h-4 w-4" /></span>
