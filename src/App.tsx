@@ -195,7 +195,8 @@ const db = getFirestore(app);
 //        botón Abrir todo / Cerrar todo más visible.
 //  v58.5 Menú "Totales": elegir qué filas del pie se ven (pedido, asignado, contenedores
 //        completos, pallets sueltos): una, varias, todas o ninguna. Se recuerda en el equipo.
-const APP_VERSION = "v58.5";
+//  v58.6 "+ Agregar especie" un poco más visible (borde punteado).
+const APP_VERSION = "v58.6";
 const APP_VERSION_DATE = "16 Nov 2026";
 const WHATSNEW_VERSION = "v55";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;

@@ -218,6 +218,8 @@ function MenuTotales({ valor, onChange }: { valor: TotalesVis; onChange: (v: Tot
   );
 }
 
+// "+ Agregar especie": un poco más visible que "+ proveedor" (borde punteado y texto más oscuro)
+const COMBO_ESPECIE = "h-8 w-full rounded-lg border border-dashed border-line-strong bg-surface px-2.5 text-[13px] font-medium text-fg placeholder:font-semibold placeholder:text-fg-2 scroll-mt-16 md:scroll-mt-44 hover:border-primary hover:placeholder:text-primary focus:border-solid focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none focus:placeholder:font-normal focus:placeholder:text-subtle";
 const mayusInicial = (x: string) => x.charAt(0).toLocaleUpperCase("es") + x.slice(1);
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -765,11 +767,11 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                     <tr><td colSpan={O.codes.length + 4} className="px-6 py-10 text-center">
                       <p className="text-base font-semibold text-fg">Sin pedido para {weekShort(semana)}.</p>
                       {semanaOrigen ? <>
-                        <p className="mt-1 text-sm text-muted">Parte con las mismas especies y proveedores de {weekShort(semanaOrigen)} (sin cantidades) o agrega la primera especie con “+ especie”.</p>
+                        <p className="mt-1 text-sm text-muted">Parte con las mismas especies y proveedores de {weekShort(semanaOrigen)} (sin cantidades) o agrega la primera especie con “+ Agregar especie”.</p>
                         <Button className="mt-4" variant="primary" icon="duplicate" disabled={copiando} onClick={copiarEstructura}>
                           Copiar especies y proveedores de {weekShort(semanaOrigen)}
                         </Button>
-                      </> : <p className="mt-1 text-sm text-muted">Agrega la primera especie con “+ especie”.</p>}
+                      </> : <p className="mt-1 text-sm text-muted">Agrega la primera especie con “+ Agregar especie”.</p>}
                     </td></tr>
                   </tbody>
                 )}
@@ -852,8 +854,8 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                 })}
                 <tbody>
                   <tr className="border-t border-line bg-surface">
-                    <td className={`z-[1] bg-surface py-1 pr-2 pl-6 sm:sticky sm:left-0 ${M.bloques.length && filasPie.length ? "" : "lg:rounded-bl-2xl"}`}>
-                      <Combo placeholder="+ especie" ariaLabel="Agregar especie" flechasSiempre inputClassName={COMBO_QUIETO}
+                    <td className={`z-[1] bg-surface py-2 pr-2 pl-6 sm:sticky sm:left-0 ${M.bloques.length && filasPie.length ? "" : "lg:rounded-bl-2xl"}`}>
+                      <Combo placeholder="+ Agregar especie" ariaLabel="Agregar especie" flechasSiempre inputClassName={COMBO_ESPECIE}
                         getOptions={opcionesEspecie} onPick={elegirEspecie} />
                     </td>
                     <td colSpan={O.codes.length + 3} />
