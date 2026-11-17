@@ -1,18 +1,30 @@
 // ── Pedidos semanales · vista Proveedores (v58.0) ────────────────────────────
 // Consulta de lo que se compra a cada proveedor, por oficina o por especie. Reúne lo
 // que antes estaba en "Proveedor × Oficina", "Proveedor × Especie" y "Por proveedor".
+// v59.0: filtro Todos / Marítimo / Aéreo.
 import React, { useMemo, useState } from "react";
 import { Icon } from "../ui";
-import { type Asig, type Mercado, type Pedido, fmt0 } from "./datos";
+import { type Asig, type Mercado, type Pedido, type Via, fmt0, viaDe } from "./datos";
 
 type Modo = "ofi" | "esp";
 const sumar = (xs: number[]) => xs.reduce((s, x) => s + x, 0);
 const MODOS: { id: Modo; label: string }[] = [{ id: "ofi", label: "Por oficina" }, { id: "esp", label: "Por especie" }];
+type Filtro = "todos" | Via;
+const FILTROS: { id: Filtro; label: string }[] = [{ id: "todos", label: "Todos" }, { id: "maritimo", label: "Marítimo" }, { id: "aereo", label: "Aéreo" }];
+/** Suma dos pedidos (especie → oficina → pallets) */
+const sumarPedidos = (a: Pedido, b: Pedido): Pedido => {
+  const out: Pedido = JSON.parse(JSON.stringify(a || {}));
+  for (const [e, r] of Object.entries(b || {})) { const o = (out[e] ||= {}); for (const [m, v] of Object.entries(r || {})) o[m] = (+o[m] || 0) + (+v || 0); }
+  return out;
+};
 
-export default function Proveedores({ asig, pedido, mks, ordenar }: {
-  asig: Asig[]; pedido: Pedido; mks: Mercado[]; ordenar: (a: string[]) => string[];
+export default function Proveedores({ asig: asigTodas, pedidos, mks, ordenar }: {
+  asig: Asig[]; pedidos: Record<Via, Pedido>; mks: Mercado[]; ordenar: (a: string[]) => string[];
 }) {
   const [modo, setModo] = useState<Modo>("ofi");
+  const [filtro, setFiltro] = useState<Filtro>("todos");
+  const asig = useMemo(() => (filtro === "todos" ? asigTodas : asigTodas.filter((a) => viaDe(a) === filtro)), [asigTodas, filtro]);
+  const pedido = useMemo(() => (filtro === "todos" ? sumarPedidos(pedidos.maritimo, pedidos.aereo) : pedidos[filtro]), [pedidos, filtro]);
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({});
 
   const D = useMemo(() => {
@@ -29,11 +41,22 @@ export default function Proveedores({ asig, pedido, mks, ordenar }: {
   const pedTot = sumar(Object.values(pedido).flatMap((r) => Object.values(r || {}).map((v) => +v || 0)));
   const nombreOfi = (c: string) => mks.find((m) => m.code === c)?.nombre || c;
 
+  const selector = (
+    <div className="inline-flex overflow-hidden rounded-lg border border-line-strong bg-surface" role="group" aria-label="Vía">
+      {FILTROS.map((f) => (
+        <button key={f.id} type="button" onClick={() => setFiltro(f.id)} aria-pressed={filtro === f.id}
+          className={`h-8 px-3 text-xs font-semibold transition-colors ${filtro === f.id ? "bg-primary text-primary-fg" : "text-fg-2 hover:bg-surface-2"}`}>{f.label}</button>
+      ))}
+    </div>
+  );
   if (!provs.length) return (
-    <section className="rounded-2xl border border-dashed border-line-strong bg-surface px-6 py-12 text-center">
-      <p className="text-base font-semibold text-fg">Sin proveedores asignados esta semana.</p>
-      <p className="mt-1 text-sm text-muted">Asígnalos en Pedido: abre una especie y usa “+ Agregar proveedor”.</p>
-    </section>
+    <>
+      {asigTodas.some((a) => +a.cajas > 0) && <div className="flex flex-wrap items-center gap-3">{selector}</div>}
+      <section className="rounded-2xl border border-dashed border-line-strong bg-surface px-6 py-12 text-center">
+        <p className="text-base font-semibold text-fg">{filtro === "todos" ? "Sin proveedores asignados esta semana." : `Sin proveedores asignados en ${filtro === "aereo" ? "aéreo" : "marítimo"} esta semana.`}</p>
+        <p className="mt-1 text-sm text-muted">Asígnalos en Pedido: abre una especie y usa “+ Agregar proveedor”.</p>
+      </section>
+    </>
   );
 
   const cols = modo === "ofi" ? ofis.map((m) => ({ k: m, label: m, title: nombreOfi(m) })) : ordenar(A.map((a) => a.especie)).map((e) => ({ k: e, label: e, title: e }));
@@ -51,6 +74,7 @@ export default function Proveedores({ asig, pedido, mks, ordenar }: {
   return (
     <>
       <div className="flex flex-wrap items-center gap-3">
+        {selector}
         <div className="inline-flex overflow-hidden rounded-lg border border-line-strong bg-surface" role="group" aria-label="Ver proveedores">
           {MODOS.map((m) => (
             <button key={m.id} type="button" onClick={() => setModo(m.id)} aria-pressed={modo === m.id}

@@ -8,8 +8,16 @@ export type Proveedor = { nombre: string; especies: string[] };
 export type Catalogo = { especies: string[]; mercados: Mercado[]; proveedores: Proveedor[] };
 /** pedido[especie][mercado] = pallets (el campo de las asignaciones se llama "cajas" por historia) */
 export type Pedido = Record<string, Record<string, number>>;
-export type Semana = { semana: string; pedido?: Pedido; actualizado?: number };
-export type Asig = { id: string; proveedor: string; especie: string; mercado: string; cajas: number; creado?: number };
+/** Vía de transporte. Todo lo guardado antes de v59 es marítimo (no lleva marca). */
+export type Via = "maritimo" | "aereo";
+export const VIAS: Via[] = ["maritimo", "aereo"];
+/** pedido = marítimo (campo histórico) · aereo = pedido aéreo, misma forma */
+export type Semana = { semana: string; pedido?: Pedido; aereo?: Pedido; actualizado?: number };
+/** via solo se guarda si es "aereo"; sin via = marítimo */
+export type Asig = { id: string; proveedor: string; especie: string; mercado: string; cajas: number; creado?: number; via?: "aereo" };
+export const viaDe = (a: { via?: string }): Via => (a.via === "aereo" ? "aereo" : "maritimo");
+export const campoPedido = (via: Via) => (via === "aereo" ? "aereo" : "pedido");
+export const pedidoDe = (s: Semana | undefined | null, via: Via): Pedido => (via === "aereo" ? s?.aereo : s?.pedido) || {};
 export type AsigData = Omit<Asig, "id">;
 type Unsub = () => void;
 
@@ -18,12 +26,12 @@ export interface SemanalStore {
   subSemanas(cb: (s: Record<string, Semana>) => void, err: (e: unknown) => void): Unsub;
   subAsig(semana: string, cb: (a: Asig[]) => void, err: (e: unknown) => void): Unsub;
   setCatalogo(c: Catalogo): Promise<void>;
-  /** Escribe una celda del pedido (crea la semana si no existe). */
-  setPedidoCelda(semana: string, especie: string, mercado: string, cajas: number): Promise<void>;
-  /** Reemplaza el pedido completo de la semana. */
-  setPedido(semana: string, pedido: Pedido): Promise<void>;
-  /** Quita una especie del pedido de la semana. */
-  borrarEspeciePedido(semana: string, especie: string): Promise<void>;
+  /** Escribe una celda del pedido de una vía (crea la semana si no existe). */
+  setPedidoCelda(semana: string, especie: string, mercado: string, cajas: number, via?: Via): Promise<void>;
+  /** Reemplaza el pedido completo de una vía (la semana debe existir; no toca la otra vía). */
+  setPedido(semana: string, pedido: Pedido, via?: Via): Promise<void>;
+  /** Quita una especie del pedido de una vía. */
+  borrarEspeciePedido(semana: string, especie: string, via?: Via): Promise<void>;
   /** Marca la semana como usada (para que aparezca en la lista de semanas). */
   tocarSemana(semana: string): Promise<void>;
   borrarSemana(semana: string): Promise<void>;
@@ -121,9 +129,9 @@ export const FAMILIAS: [string, string[]][] = [
 export const familia = (e: string) => { for (const [f, pre] of FAMILIAS) if (pre.some((x) => e.startsWith(x))) return f; return "Otras"; };
 
 /** Id determinístico de una asignación (especie + proveedor + mercado). */
-export function asigId(especie: string, proveedor: string, mercado: string) {
+export function asigId(especie: string, proveedor: string, mercado: string, via: Via = "maritimo") {
   let x = 5381;
-  for (const ch of `${especie}|${proveedor}|${mercado}`) x = ((x * 33) ^ (ch.codePointAt(0) || 0)) >>> 0;
+  for (const ch of `${especie}|${proveedor}|${mercado}${via === "aereo" ? "|aereo" : ""}`) x = ((x * 33) ^ (ch.codePointAt(0) || 0)) >>> 0;
   return "x" + x.toString(36);
 }
 

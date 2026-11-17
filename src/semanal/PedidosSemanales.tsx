@@ -1,7 +1,8 @@
-// ── Sección "Pedidos semanales" (v58.0) ──────────────────────────────────────
-// Una hoja por semana (W01–W52). Vista Pedido: una sola tabla Especie × Oficina
-// donde se arma todo: cada especie es una fila con el pedido por oficina y, al
-// abrirla, sus proveedores con los pallets asignados y "+ Agregar proveedor". Las celdas
+// ── Sección "Pedidos semanales" (v59.0) ──────────────────────────────────────
+// Una hoja por semana (W01–W52). Vista Pedido: dos tablas Especie × Oficina, una
+// para marítimo y otra para aéreo (mismo catálogo y mismo funcionamiento; los
+// contenedores solo aplican a marítimo). En cada tabla se arma todo: cada especie
+// es una fila con el pedido por oficina y, al abrirla, sus proveedores con los pallets asignados y "+ Agregar proveedor". Las celdas
 // no se pintan: el estado de la asignación va en texto al final de la fila y el
 // detalle por oficina en la fila "Falta" de la especie abierta. Al pie, los
 // contenedores completos y los pallets sueltos de cada oficina. Vista
@@ -11,7 +12,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import ReactDOM from "react-dom";
 import { Icon, Button, IconButton, Spinner } from "../ui";
 import {
-  type Asig, type Catalogo, type Semana, type SemanalStore,
+  type Asig, type Catalogo, type Semana, type SemanalStore, type Via, VIAS, viaDe, pedidoDe,
   type Cuadratura, asigId, clave, cuadrar, currentWeek, familia, FAMILIAS, fmt, fmt0, gruposDuplicados, mismoQue, parecidos,
   parseCajas, parseWeek, shiftWeek, weekId, weekRange, weekShort,
 } from "./datos";
@@ -54,6 +55,12 @@ const leerFilas = (): { esp: FilasEsp; prov: FilasProv } => {
 const safeGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
 const safeSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* sin almacenamiento */ } };
 const clonar = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
+// Claves locales por vía: lo marítimo conserva las claves de siempre (sin migrar nada)
+const fk = (w: string, via: Via) => (via === "aereo" ? `${w}~A` : w);      // filas sin cantidades de la semana
+const semDeFk = (k: string) => k.replace(/~A$/, "");
+const ak = (via: Via, esp: string) => (via === "aereo" ? `A:${esp}` : esp); // especie abierta
+const AEREO_OCULTO_KEY = "frutam_semanal_aereo_oculto";
+const VIA_INFO: Record<Via, { label: string; icon: string }> = { maritimo: { label: "Marítimo", icon: "ship" }, aereo: { label: "Aéreo", icon: "plane" } };
 
 // ── Celda numérica: edita local, guarda al salir ─────────────────────────────
 // Sin caja a la vista: el borde aparece al pasar el mouse y al escribir.
@@ -164,8 +171,8 @@ const AL_PASAR = "opacity-0 transition-opacity group-hover:opacity-100 focus-vis
 const TOTALES = [
   { id: "pedido", label: "Pedido", desc: "Pallets pedidos por oficina" },
   { id: "asignado", label: "Asignado", desc: "Pallets asignados a proveedores" },
-  { id: "contenedores", label: "Contenedores completos", desc: "21 pallets de manzana o 20 de otra especie" },
-  { id: "sueltos", label: "Pallets sueltos", desc: "Los que no alcanzan a llenar otro contenedor" },
+  { id: "contenedores", label: "Contenedores completos", desc: "Solo marítimo · 21 pallets de manzana o 20 de otra especie" },
+  { id: "sueltos", label: "Pallets sueltos", desc: "Solo marítimo · los que no alcanzan a llenar otro contenedor" },
 ] as const;
 type TotalId = typeof TOTALES[number]["id"];
 type TotalesVis = Record<TotalId, boolean>;
@@ -289,13 +296,15 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
   const [extraEsp, setExtraEsp] = useState<FilasEsp>(() => leerFilas().esp);
   const [extraProv, setExtraProv] = useState<FilasProv>(() => leerFilas().prov);
   useEffect(() => {
-    const ws = [...new Set([...Object.keys(extraEsp), ...Object.keys(extraProv)])].sort().slice(-12); // últimas 12 semanas
+    const ws = [...new Set([...Object.keys(extraEsp), ...Object.keys(extraProv)])].sort().slice(-24); // últimas 12 semanas × 2 vías
     safeSet(FILAS_KEY, JSON.stringify({
       esp: Object.fromEntries(ws.filter((w) => extraEsp[w]?.length).map((w) => [w, extraEsp[w]])),
       prov: Object.fromEntries(ws.filter((w) => Object.values(extraProv[w] || {}).some((l) => l.length)).map((w) => [w, extraProv[w]])),
     }));
   }, [extraEsp, extraProv]);
   const [copiando, setCopiando] = useState(false);
+  const [aereoOculto, setAereoOculto] = useState(() => safeGet(AEREO_OCULTO_KEY) === "1");
+  useEffect(() => { safeSet(AEREO_OCULTO_KEY, aereoOculto ? "1" : "0"); }, [aereoOculto]);
   const [pendientes, setPendientes] = useState(0);
   const [errorGuardar, setErrorGuardar] = useState(false);
   const [aviso, setAviso] = useState("");
@@ -339,49 +348,64 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
   const provBy = (n: string) => C.proveedores.find((p) => p.nombre === n);
   const eidx = (e: string) => { const i = C.especies.indexOf(e); return i < 0 ? 999 : i; };
   const ordenar = (arr: string[]) => [...new Set(arr)].sort((a, b) => eidx(a) - eidx(b) || a.localeCompare(b));
-  const pedido = semanas[semana]?.pedido || {};
+  const sem = semanas[semana];
+  const pedidos = useMemo(() => ({ maritimo: pedidoDe(sem, "maritimo"), aereo: pedidoDe(sem, "aereo") }), [sem]);
+  const asigPor = useMemo(() => ({ maritimo: asig.filter((a) => viaDe(a) === "maritimo"), aereo: asig.filter((a) => viaDe(a) === "aereo") }), [asig]);
 
-  const M = useMemo(() => {
-    const ex = extraEsp[semana] || []; const xp = extraProv[semana] || {};
-    const esps = ordenar([...Object.keys(pedido).filter((e) => Object.values(pedido[e] || {}).some((v) => +v > 0)), ...asig.map((a) => a.especie), ...ex]);
-    let pedTot = 0, asgTot = 0;
-    const bloques: Bloque[] = esps.map((e) => {
-      const p = pedido[e] || {}; const filas: Bloque["filas"] = {};
-      for (const a of asig.filter((x) => x.especie === e)) {
-        const f = (filas[a.proveedor] ||= {}); const c = f[a.mercado];
-        f[a.mercado] = c ? { cajas: c.cajas + (+a.cajas || 0), ids: [...c.ids, a.id] } : { cajas: +a.cajas || 0, ids: [a.id] };
-      }
-      for (const n of xp[e] || []) filas[n] ||= {};
-      const codes = new Set([...mks.map((m) => m.code), ...Object.keys(p), ...Object.values(filas).flatMap((r) => Object.keys(r))]);
-      let pt = 0, at = 0; const falta: Record<string, number> = {};
-      for (const m of codes) {
-        const pv = +p[m] || 0; const av = Object.values(filas).reduce((s, r) => s + (r[m]?.cajas || 0), 0);
-        pt += pv; at += av; falta[m] = pv - av;
-      }
-      pedTot += pt; asgTot += at;
-      const fp = Object.values(falta).reduce((s, v) => s + (v > 0 ? v : 0), 0);
-      const fn = Object.values(falta).reduce((s, v) => s + (v < 0 ? -v : 0), 0);
-      return { esp: e, ped: p, filas, provs: Object.keys(filas).sort((a, b) => a.localeCompare(b)), pt, at, falta, ft: pt - at, fp, fn, diff: fp > 0 || fn > 0 };
-    });
-    return { bloques, pedTot, asgTot, falta: bloques.reduce((s, b) => s + b.fp, 0), demas: bloques.reduce((s, b) => s + b.fn, 0) };
+  const MV = useMemo(() => {
+    const calc = (via: Via) => {
+      const pedido = pedidos[via]; const lista = asigPor[via];
+      const ex = extraEsp[fk(semana, via)] || []; const xp = extraProv[fk(semana, via)] || {};
+      const esps = ordenar([...Object.keys(pedido).filter((e) => Object.values(pedido[e] || {}).some((v) => +v > 0)), ...lista.map((a) => a.especie), ...ex]);
+      let pedTot = 0, asgTot = 0;
+      const bloques: Bloque[] = esps.map((e) => {
+        const p = pedido[e] || {}; const filas: Bloque["filas"] = {};
+        for (const a of lista.filter((x) => x.especie === e)) {
+          const f = (filas[a.proveedor] ||= {}); const c = f[a.mercado];
+          f[a.mercado] = c ? { cajas: c.cajas + (+a.cajas || 0), ids: [...c.ids, a.id] } : { cajas: +a.cajas || 0, ids: [a.id] };
+        }
+        for (const n of xp[e] || []) filas[n] ||= {};
+        const codes = new Set([...mks.map((m) => m.code), ...Object.keys(p), ...Object.values(filas).flatMap((r) => Object.keys(r))]);
+        let pt = 0, at = 0; const falta: Record<string, number> = {};
+        for (const m of codes) {
+          const pv = +p[m] || 0; const av = Object.values(filas).reduce((s, r) => s + (r[m]?.cajas || 0), 0);
+          pt += pv; at += av; falta[m] = pv - av;
+        }
+        pedTot += pt; asgTot += at;
+        const fp = Object.values(falta).reduce((s, v) => s + (v > 0 ? v : 0), 0);
+        const fn = Object.values(falta).reduce((s, v) => s + (v < 0 ? -v : 0), 0);
+        return { esp: e, ped: p, filas, provs: Object.keys(filas).sort((a, b) => a.localeCompare(b)), pt, at, falta, ft: pt - at, fp, fn, diff: fp > 0 || fn > 0 };
+      });
+      return { bloques, pedTot, asgTot, falta: bloques.reduce((s, b) => s + b.fp, 0), demas: bloques.reduce((s, b) => s + b.fn, 0) };
+    };
+    return { maritimo: calc("maritimo"), aereo: calc("aereo") };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pedido, asig, extraEsp, extraProv, semana, cat]);
+  }, [pedidos, asigPor, extraEsp, extraProv, semana, cat]);
+  // Totales de la barra superior: las dos vías juntas
+  const T = {
+    pedTot: MV.maritimo.pedTot + MV.aereo.pedTot, asgTot: MV.maritimo.asgTot + MV.aereo.asgTot,
+    falta: MV.maritimo.falta + MV.aereo.falta, demas: MV.maritimo.demas + MV.aereo.demas,
+  };
+  const nBloques = MV.maritimo.bloques.length + MV.aereo.bloques.length;
 
-  // Oficinas (columnas): las del catálogo + las que aparezcan en el pedido o en asignaciones
+  // Oficinas (columnas, iguales en las dos tablas): catálogo + las que aparezcan en pedidos o asignaciones
   const O = useMemo(() => {
     const codes = mks.map((m) => m.code);
-    for (const e of Object.keys(pedido)) for (const m of Object.keys(pedido[e] || {})) if (+pedido[e][m] > 0 && !codes.includes(m)) codes.push(m);
+    for (const via of VIAS) { const P = pedidos[via]; for (const e of Object.keys(P)) for (const m of Object.keys(P[e] || {})) if (+P[e][m] > 0 && !codes.includes(m)) codes.push(m); }
     for (const a of asig) if (+a.cajas > 0 && !codes.includes(a.mercado)) codes.push(a.mercado);
-    const cuad: Record<string, Cuadratura> = {}; const asg: Record<string, number> = {};
-    for (const m of codes) {
-      const r: Record<string, number> = {};
-      for (const e of Object.keys(pedido)) if (+pedido[e]?.[m] > 0) r[e] = +pedido[e][m];
-      cuad[m] = cuadrar(r); asg[m] = 0;
-    }
-    for (const a of asig) if (+a.cajas > 0) asg[a.mercado] = (asg[a.mercado] || 0) + +a.cajas;
-    return { codes, cuad, asg };
+    const porVia = (via: Via) => {
+      const P = pedidos[via]; const cuad: Record<string, Cuadratura> = {}; const asg: Record<string, number> = {};
+      for (const m of codes) {
+        const r: Record<string, number> = {};
+        for (const e of Object.keys(P)) if (+P[e]?.[m] > 0) r[e] = +P[e][m];
+        cuad[m] = cuadrar(r); asg[m] = 0;
+      }
+      for (const a of asigPor[via]) if (+a.cajas > 0) asg[a.mercado] = (asg[a.mercado] || 0) + +a.cajas;
+      return { cuad, asg };
+    };
+    return { codes, maritimo: porVia("maritimo"), aereo: porVia("aereo") };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pedido, asig, cat]);
+  }, [pedidos, asig, asigPor, cat]);
 
   // ── Escrituras ──────────────────────────────────────────────────────────────
   const saveCat = useCallback((mut: (c: Catalogo) => void) => enqueue(async () => {
@@ -390,13 +414,14 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
     await store.setCatalogo(next);
   }), [enqueue, store]);
 
-  const setPed = (esp: string, mk: string, v: number) => { const s = semana; enqueue(() => store.setPedidoCelda(s, esp, mk, v)); };
-  const setCeldaAsig = (esp: string, prov: string, mk: string, v: number) => {
+  const setPed = (via: Via, esp: string, mk: string, v: number) => { const s = semana; enqueue(() => store.setPedidoCelda(s, esp, mk, v, via)); };
+  const setCeldaAsig = (via: Via, esp: string, prov: string, mk: string, v: number) => {
     const s = semana;
-    const ex = asigRef.current.filter((a) => a.especie === esp && a.proveedor === prov && a.mercado === mk);
+    const ex = asigRef.current.filter((a) => viaDe(a) === via && a.especie === esp && a.proveedor === prov && a.mercado === mk);
     enqueue(async () => {
       if (v > 0) {
-        await store.setAsig(s, ex[0]?.id || asigId(esp, prov, mk), { proveedor: prov, especie: esp, mercado: mk, cajas: v, creado: Date.now() });
+        await store.setAsig(s, ex[0]?.id || asigId(esp, prov, mk, via),
+          { proveedor: prov, especie: esp, mercado: mk, cajas: v, creado: Date.now(), ...(via === "aereo" ? { via: "aereo" as const } : {}) });
         if (ex.length > 1) await store.borrarAsig(s, ex.slice(1).map((a) => a.id));
       } else if (ex.length) await store.borrarAsig(s, ex.map((a) => a.id));
       await store.tocarSemana(s);
@@ -410,34 +435,34 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
       x.especies = [...(x.especies || []), esp].sort((a, b) => c.especies.indexOf(a) - c.especies.indexOf(b));
     });
   };
-  const quitarProv = (esp: string, prov: string) => {
-    const s = semana;
-    setExtraProv((x) => { const w = { ...(x[s] || {}) }; w[esp] = (w[esp] || []).filter((n) => n !== prov); return { ...x, [s]: w }; });
-    const ids = asigRef.current.filter((a) => a.especie === esp && a.proveedor === prov).map((a) => a.id);
+  const quitarProv = (via: Via, esp: string, prov: string) => {
+    const s = semana; const k = fk(s, via);
+    setExtraProv((x) => { const w = { ...(x[k] || {}) }; w[esp] = (w[esp] || []).filter((n) => n !== prov); return { ...x, [k]: w }; });
+    const ids = asigRef.current.filter((a) => viaDe(a) === via && a.especie === esp && a.proveedor === prov).map((a) => a.id);
     if (ids.length) enqueue(() => store.borrarAsig(s, ids));
   };
-  const borrarEspecie = (esp: string) => {
-    const s = semana;
-    setExtraEsp((x) => ({ ...x, [s]: (x[s] || []).filter((e) => e !== esp) }));
-    setExtraProv((x) => { const w = { ...(x[s] || {}) }; delete w[esp]; return { ...x, [s]: w }; });
-    const ids = asigRef.current.filter((a) => a.especie === esp).map((a) => a.id);
-    enqueue(async () => { if (ids.length) await store.borrarAsig(s, ids); await store.borrarEspeciePedido(s, esp); })
-      .then(() => notify("success", `${esp} borrado de ${weekShort(s)}`, 2500));
+  const borrarEspecie = (via: Via, esp: string) => {
+    const s = semana; const k = fk(s, via);
+    setExtraEsp((x) => ({ ...x, [k]: (x[k] || []).filter((e) => e !== esp) }));
+    setExtraProv((x) => { const w = { ...(x[k] || {}) }; delete w[esp]; return { ...x, [k]: w }; });
+    const ids = asigRef.current.filter((a) => viaDe(a) === via && a.especie === esp).map((a) => a.id);
+    enqueue(async () => { if (ids.length) await store.borrarAsig(s, ids); await store.borrarEspeciePedido(s, esp, via); })
+      .then(() => notify("success", `${esp} (${VIA_INFO[via].label.toLowerCase()}) borrado de ${weekShort(s)}`, 2500));
   };
   const borrarSemana = () => {
     const s = semana; const ids = asigRef.current.map((a) => a.id);
-    setExtraEsp((x) => ({ ...x, [s]: [] })); setExtraProv((x) => ({ ...x, [s]: {} }));
+    setExtraEsp((x) => ({ ...x, [fk(s, "maritimo")]: [], [fk(s, "aereo")]: [] })); setExtraProv((x) => ({ ...x, [fk(s, "maritimo")]: {}, [fk(s, "aereo")]: {} }));
     enqueue(async () => { if (ids.length) await store.borrarAsig(s, ids); await store.borrarSemana(s); })
-      .then(() => notify("success", `Semana ${weekShort(s)} borrada`, 2500));
+      .then(() => notify("success", `Semana ${weekShort(s)} borrada (marítimo y aéreo)`, 2500));
   };
 
   // ── Copiar especies y proveedores (sin cantidades) de la última semana con datos ──
   // Vale como origen una semana con pedido guardado o con filas armadas en este equipo
-  // (especies y proveedores agregados que todavía no tienen cantidades).
-  const filasLocales = (w: string) => (extraEsp[w]?.length || 0) > 0 || Object.values(extraProv[w] || {}).some((l) => l.length > 0);
+  // (especies y proveedores agregados que todavía no tienen cantidades). Copia las dos vías.
+  const filasLocales = (w: string) => VIAS.some((via) => (extraEsp[fk(w, via)]?.length || 0) > 0 || Object.values(extraProv[fk(w, via)] || {}).some((l) => l.length > 0));
   const semanaOrigen = useMemo(() => {
-    const prev = [...new Set([...Object.keys(semanas), ...Object.keys(extraEsp), ...Object.keys(extraProv)])].filter((w) => w < semana).sort().reverse();
-    const conPedido = (w: string) => Object.values(semanas[w]?.pedido || {}).some((r) => Object.values(r || {}).some((v) => +v > 0));
+    const prev = [...new Set([...Object.keys(semanas), ...Object.keys(extraEsp).map(semDeFk), ...Object.keys(extraProv).map(semDeFk)])].filter((w) => w < semana).sort().reverse();
+    const conPedido = (w: string) => VIAS.some((via) => Object.values(pedidoDe(semanas[w], via)).some((r) => Object.values(r || {}).some((v) => +v > 0)));
     return prev.find((w) => conPedido(w) || filasLocales(w)) || prev.find((w) => w in semanas) || "";
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [semanas, semana, extraEsp, extraProv]);
@@ -445,30 +470,38 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
     const src = semanaOrigen, dst = semana; if (!src || copiando) return;
     setCopiando(true);
     try {
-      const lista = (await store.listAsig(src)).filter((a) => +a.cajas > 0);
-      const ped = semanasRef.current[src]?.pedido || {};
-      const locEsp = extraEsp[src] || []; const locProv = extraProv[src] || {};
-      const provs: Record<string, string[]> = {};
-      const sumar = (e: string, n: string) => { const l = (provs[e] ||= []); if (!l.includes(n)) l.push(n); };
-      for (const a of lista) sumar(a.especie, a.proveedor);
-      for (const [e, l] of Object.entries(locProv)) for (const n of l) sumar(e, n);
-      const esps = [...new Set([...Object.keys(ped).filter((e) => Object.values(ped[e] || {}).some((v) => +v > 0)), ...lista.map((a) => a.especie), ...locEsp, ...Object.keys(provs)])];
-      if (!esps.length) { notify("info", `${weekShort(src)} no tiene especies ni proveedores para copiar.`, 4000); return; }
-      setExtraEsp((x) => ({ ...x, [dst]: [...new Set([...(x[dst] || []), ...esps])] }));
-      setExtraProv((x) => { const w = { ...(x[dst] || {}) }; for (const [e, l] of Object.entries(provs)) w[e] = [...new Set([...(w[e] || []), ...l])]; return { ...x, [dst]: w }; });
-      setAbiertas((a) => ({ ...a, ...Object.fromEntries(esps.map((e) => [e, true])) }));
-      notify("success", `Se copiaron ${esps.length} especies y sus proveedores de ${weekShort(src)}, sin cantidades.`, 5000);
+      const todas = (await store.listAsig(src)).filter((a) => +a.cajas > 0);
+      let total = 0; const abrir: Record<string, boolean> = {};
+      for (const via of VIAS) {
+        const lista = todas.filter((a) => viaDe(a) === via);
+        const ped = pedidoDe(semanasRef.current[src], via);
+        const locEsp = extraEsp[fk(src, via)] || []; const locProv = extraProv[fk(src, via)] || {};
+        const provs: Record<string, string[]> = {};
+        const sumar = (e: string, n: string) => { const l = (provs[e] ||= []); if (!l.includes(n)) l.push(n); };
+        for (const a of lista) sumar(a.especie, a.proveedor);
+        for (const [e, l] of Object.entries(locProv)) for (const n of l) sumar(e, n);
+        const esps = [...new Set([...Object.keys(ped).filter((e) => Object.values(ped[e] || {}).some((v) => +v > 0)), ...lista.map((a) => a.especie), ...locEsp, ...Object.keys(provs)])];
+        if (!esps.length) continue;
+        const k = fk(dst, via); total += esps.length;
+        setExtraEsp((x) => ({ ...x, [k]: [...new Set([...(x[k] || []), ...esps])] }));
+        setExtraProv((x) => { const w = { ...(x[k] || {}) }; for (const [e, l] of Object.entries(provs)) w[e] = [...new Set([...(w[e] || []), ...l])]; return { ...x, [k]: w }; });
+        for (const e of esps) abrir[ak(via, e)] = true;
+        if (via === "aereo") setAereoOculto(false);
+      }
+      if (!total) { notify("info", `${weekShort(src)} no tiene especies ni proveedores para copiar.`, 4000); return; }
+      setAbiertas((a) => ({ ...a, ...abrir }));
+      notify("success", `Se copiaron las especies y proveedores de ${weekShort(src)} (marítimo y aéreo), sin cantidades.`, 5000);
     } catch (e) { console.error(e); notify("error", motivo(e, `No se pudo leer ${weekShort(src)}.`), 6000); }
     finally { setCopiando(false); }
   };
 
-  // ── Renombrar / unir (se aplica en todas las semanas guardadas) ─────────────
+  // ── Renombrar / unir (se aplica en todas las semanas guardadas, en las dos vías) ──
   const cargarUso = useCallback(async () => {
     const u: Uso = { esp: {}, prov: {}, mk: {} };
     const add = (k: Kind, n: string, id: string) => (u[k][n] ||= new Set()).add(id);
     try {
       for (const [id, w] of Object.entries(semanasRef.current)) {
-        for (const [e, r] of Object.entries(w.pedido || {})) for (const [m, v] of Object.entries(r || {})) if (+v > 0) { add("esp", e, id); add("mk", m, id); }
+        for (const via of VIAS) for (const [e, r] of Object.entries(pedidoDe(w, via))) for (const [m, v] of Object.entries(r || {})) if (+v > 0) { add("esp", e, id); add("mk", m, id); }
         for (const a of await store.listAsig(id)) if (+a.cajas > 0) { add("esp", a.especie, id); add("prov", a.proveedor, id); add("mk", a.mercado, id); }
       }
       setUso(u);
@@ -483,21 +516,22 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
       let ch = false;
       if (kind !== "prov") {
         const d = await store.getSemana(id);
-        if (d?.pedido) {
-          const P = clonar(d.pedido); let pc = false;
+        for (const via of VIAS) {
+          const orig = via === "aereo" ? d?.aereo : d?.pedido; if (!orig) continue;
+          const P = clonar(orig); let pc = false;
           if (kind === "esp" && P[from]) { const r = P[to] || {}; for (const [m, v] of Object.entries(P[from])) r[m] = (+r[m] || 0) + (+v || 0); P[to] = r; delete P[from]; pc = true; }
           if (kind === "mk") for (const e of Object.keys(P)) { const r = P[e]; if (r && from in r) { r[to] = (+r[to] || 0) + (+r[from] || 0); delete r[from]; pc = true; } }
-          if (pc) { await store.setPedido(id, P); ch = true; }
+          if (pc) { await store.setPedido(id, P, via); ch = true; }
         }
       }
       const lista = await store.listAsig(id);
       const afectadas = lista.filter((a) => (a as any)[f] === from);
       for (const a of afectadas) await store.patchAsig(id, a.id, { [f]: to } as any);
       if (afectadas.length) {
-        // si quedaron dos filas iguales (misma especie, proveedor y mercado), se suman
+        // si quedaron dos filas iguales (misma vía, especie, proveedor y mercado), se suman
         const vistas: Record<string, { id: string; cajas: number }> = {}; const sobran: string[] = [];
         for (const a0 of await store.listAsig(id)) {
-          const k = `${a0.especie}|${a0.proveedor}|${a0.mercado}`;
+          const k = `${viaDe(a0)}|${a0.especie}|${a0.proveedor}|${a0.mercado}`;
           if (vistas[k]) { vistas[k].cajas += +a0.cajas || 0; await store.patchAsig(id, vistas[k].id, { cajas: vistas[k].cajas }); sobran.push(a0.id); }
           else vistas[k] = { id: a0.id, cajas: +a0.cajas || 0 };
         }
@@ -531,7 +565,7 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
     enqueue(async () => { for (const o of otros) await migrar(kind, o, keep); setAviso(""); notify("success", `${otros.map((o) => `“${o}”`).join(", ")} quedó unido con “${keep}”`); await cargarUso(); });
   };
 
-  // ── Navegación con teclado en la grilla ─────────────────────────────────────
+  // ── Navegación con teclado en la grilla (pasa de una tabla a la otra) ───────
   const ultimaCol = useRef("");   // columna (oficina) de la última celda visitada, para ↑ ↓
   const irA = (el: Element | null | undefined) => {
     if (!(el instanceof HTMLInputElement)) return;
@@ -561,42 +595,46 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
       irA(nr.querySelector(`input[data-nav='cell'][data-mk="${CSS.escape(ultimaCol.current)}"]`) || nr.querySelector("input[data-nav]"));
     }
   };
+  const enTabla = (via: Via, sel: string) => gridRef.current?.querySelector<HTMLElement>(`table[data-via="${via}"] ${sel}`);
 
   // ── Ordenar bloques: arrastrar desde ⠿ (o ↑ ↓ con el ⠿ enfocado) ───────────
   // El orden es el de la lista de especies del catálogo, así queda igual en todas
-  // las semanas y en Proveedores. Al arrastrar, las especies se pliegan a su fila.
-  const [arrastre, setArrastre] = useState<{ esp: string; orden: string[]; y: number } | null>(null);
+  // las semanas, en las dos tablas y en Proveedores. Al arrastrar, las especies de
+  // esa tabla se pliegan a su fila.
+  const [arrastre, setArrastre] = useState<{ via: Via; esp: string; orden: string[]; y: number } | null>(null);
   const arrRef = useRef(arrastre); arrRef.current = arrastre;
   const guardarOrden = useCallback((orden: string[]) => saveCat((c) => {
     for (const e of orden) if (!c.especies.includes(e)) c.especies.push(e);
     const lugares = orden.map((e) => c.especies.indexOf(e)).sort((a, b) => a - b);
     lugares.forEach((pos, i) => { c.especies[pos] = orden[i]; });
   }), [saveCat]);
-  const moverBloque = (esp: string, d: number) => {
-    const o = M.bloques.map((b) => b.esp); const i = o.indexOf(esp); const j = i + d;
+  const moverBloque = (via: Via, esp: string, d: number) => {
+    const o = MV[via].bloques.map((b) => b.esp); const i = o.indexOf(esp); const j = i + d;
     if (i < 0 || j < 0 || j >= o.length) return;
     [o[i], o[j]] = [o[j], o[i]]; guardarOrden(o);
-    setTimeout(() => gridRef.current?.querySelector<HTMLElement>(`button[data-grip="${CSS.escape(esp)}"]`)?.focus(), 30);
+    setTimeout(() => enTabla(via, `button[data-grip="${CSS.escape(esp)}"]`)?.focus(), 30);
   };
-  const iniciarArrastre = (e: React.PointerEvent, esp: string) => {
-    if (e.button !== 0 || M.bloques.length < 2) return;
+  const iniciarArrastre = (e: React.PointerEvent, via: Via, esp: string) => {
+    if (e.button !== 0 || MV[via].bloques.length < 2) return;
     e.preventDefault();
     (document.activeElement as HTMLElement | null)?.blur?.();
-    setArrastre({ esp, orden: M.bloques.map((b) => b.esp), y: e.clientY });
+    setArrastre({ via, esp, orden: MV[via].bloques.map((b) => b.esp), y: e.clientY });
   };
   // Al empezar: dejar el título arrastrado bajo el puntero (los bloques se pliegan)
   useLayoutEffect(() => {
     const a = arrRef.current; if (!a) return;
-    const el = gridRef.current?.querySelector<HTMLElement>(`tbody[data-esp="${CSS.escape(a.esp)}"]`);
+    const el = enTabla(a.via, `tbody[data-esp="${CSS.escape(a.esp)}"]`);
     if (el) { const r = el.getBoundingClientRect(); window.scrollBy(0, r.top + r.height / 2 - a.y); }
-  }, [arrastre?.esp]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arrastre?.esp, arrastre?.via]);
   useEffect(() => {
     if (!arrastre) return;
-    const inicial = M.bloques.map((b) => b.esp).join("\u0000");
+    const via = arrastre.via;
+    const inicial = MV[via].bloques.map((b) => b.esp).join("\u0000");
     let y = arrastre.y;
     const recolocar = () => {
       const a = arrRef.current; if (!a) return;
-      const otros = [...(gridRef.current?.querySelectorAll<HTMLElement>("tbody[data-esp]") || [])].filter((s) => s.dataset.esp !== a.esp);
+      const otros = [...(gridRef.current?.querySelectorAll<HTMLElement>(`table[data-via="${via}"] tbody[data-esp]`) || [])].filter((s) => s.dataset.esp !== a.esp);
       let idx = otros.findIndex((s) => { const r = s.getBoundingClientRect(); return y < r.top + r.height / 2; });
       if (idx < 0) idx = otros.length;
       const resto = otros.map((s) => s.dataset.esp as string);
@@ -611,7 +649,7 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
     const soltar = () => {
       const a = arrRef.current; setArrastre(null);
       if (a && a.orden.join("\u0000") !== inicial) guardarOrden(a.orden);
-      setTimeout(() => a && gridRef.current?.querySelector<HTMLElement>(`tbody[data-esp="${CSS.escape(a.esp)}"] tr`)?.scrollIntoView({ block: "nearest" }), 30);
+      setTimeout(() => a && enTabla(a.via, `tbody[data-esp="${CSS.escape(a.esp)}"] tr`)?.scrollIntoView({ block: "nearest" }), 30);
     };
     const cancelar = () => setArrastre(null);
     const tecla = (ev: KeyboardEvent) => { if (ev.key === "Escape") cancelar(); };
@@ -624,26 +662,30 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
       window.removeEventListener("pointercancel", cancelar); window.removeEventListener("keydown", tecla);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [arrastre?.esp]);
-  const bloquesVista = arrastre ? arrastre.orden.map((e) => M.bloques.find((b) => b.esp === e)).filter((b): b is Bloque => !!b) : M.bloques;
+  }, [arrastre?.esp, arrastre?.via]);
+  const bloquesDe = (via: Via) => (arrastre && arrastre.via === via
+    ? arrastre.orden.map((e) => MV[via].bloques.find((b) => b.esp === e)).filter((b): b is Bloque => !!b)
+    : MV[via].bloques);
 
   // ── Opciones de los buscadores ──────────────────────────────────────────────
-  const usadas = new Set(M.bloques.map((b) => b.esp));
-  const opcionesEspecie = (raw: string): Opt[] => {
+  const usadasDe = (via: Via) => new Set(MV[via].bloques.map((b) => b.esp));
+  const opcionesEspecie = (via: Via) => (raw: string): Opt[] => {
+    const usadas = usadasDe(via);
     const q = clave(raw); const all = C.especies;
     const hits = q ? all.filter((e) => clave(e).includes(q)).sort((a, b) => clave(a).indexOf(q) - clave(b).indexOf(q)) : all.filter((e) => !usadas.has(e));
     const sim = raw.trim() ? parecidos(all, raw).filter((e) => !hits.includes(e)).slice(0, 3) : [];
+    const ya = via === "aereo" ? "ya está en aéreo" : "ya está en marítimo";
     const list: Opt[] = [...hits.filter((e) => !usadas.has(e)), ...hits.filter((e) => usadas.has(e))].slice(0, 10)
-      .map((v) => ({ v, ya: usadas.has(v), hint: usadas.has(v) ? "ya está en la semana" : undefined }));
+      .map((v) => ({ v, ya: usadas.has(v), hint: usadas.has(v) ? ya : undefined }));
     for (const v of sim) list.push({ v, ya: usadas.has(v), hint: "parecido" });
     if (raw.trim() && !mismoQue(all, raw)) list.push({ v: mayusInicial(raw.trim()), nuevo: true });
     return list;
   };
-  const elegirEspecie = (o: Opt) => {
-    let v = o.v;
+  const elegirEspecie = (via: Via) => (o: Opt) => {
+    let v = o.v; const k = fk(semana, via);
     if (o.nuevo) { const ex = mismoQue(C.especies, v); if (ex) v = ex; else saveCat((c) => { if (!c.especies.includes(v)) c.especies.push(v); }); }
-    if (!usadas.has(v)) { setExtraEsp((x) => ({ ...x, [semana]: [...(x[semana] || []), v] })); setAbiertas((a) => ({ ...a, [v]: true })); }
-    setTimeout(() => irA(gridRef.current?.querySelector(`tbody[data-esp="${CSS.escape(v)}"] input[data-nav='cell']`)), 50);
+    if (!usadasDe(via).has(v)) { setExtraEsp((x) => ({ ...x, [k]: [...(x[k] || []), v] })); setAbiertas((a) => ({ ...a, [ak(via, v)]: true })); }
+    setTimeout(() => irA(enTabla(via, `tbody[data-esp="${CSS.escape(v)}"] input[data-nav='cell']`)), 50);
   };
   const opcionesProveedor = (esp: string, enBloque: string[]) => (raw: string): Opt[] => {
     const all = C.proveedores.map((p) => p.nombre); const q = clave(raw);
@@ -658,12 +700,13 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
     else if (raw.trim() && !ex) list.push({ v: raw.trim(), nuevo: true });
     return list;
   };
-  const elegirProveedor = (esp: string) => (o: Opt) => {
+  const elegirProveedor = (via: Via, esp: string) => (o: Opt) => {
     const ex = mismoQue(C.proveedores.map((p) => p.nombre), o.v); const n = ex || o.v.trim(); if (!n) return;
+    const k = fk(semana, via);
     aprenderProv(n, esp);
-    setExtraProv((x) => { const w = { ...(x[semana] || {}) }; w[esp] = [...new Set([...(w[esp] || []), n])]; return { ...x, [semana]: w }; });
+    setExtraProv((x) => { const w = { ...(x[k] || {}) }; w[esp] = [...new Set([...(w[esp] || []), n])]; return { ...x, [k]: w }; });
     if (o.nuevo && ex && ex !== o.v.trim()) notify("info", `Se usó “${ex}”, que ya existía.`, 3000);
-    setTimeout(() => irA(gridRef.current?.querySelector(`tbody[data-esp="${CSS.escape(esp)}"] tr[data-prov="${CSS.escape(n)}"] input[data-nav='cell']`)), 50);
+    setTimeout(() => irA(enTabla(via, `tbody[data-esp="${CSS.escape(esp)}"] tr[data-prov="${CSS.escape(n)}"] input[data-nav='cell']`)), 50);
   };
 
   // ── Barra de la sección ─────────────────────────────────────────────────────
@@ -701,9 +744,10 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
           </select>
           <Button size="sm" variant="secondary" icon="chevronRight" aria-label="Semana siguiente" title="Semana siguiente" onClick={() => setSemana(shiftWeek(semana, 1))} />
         </div>
-        <p data-totales className="mr-auto flex flex-wrap items-center gap-x-2 text-sm text-muted">
-          {tot(M.pedTot, "pedido")} {punto} {tot(M.asgTot, "asignado")} {punto} {tot(M.falta, "falta", M.falta > 0 ? "font-semibold text-warning" : "")}
-          {M.demas > 0 && <>{punto} {tot(M.demas, "de más", "font-semibold text-danger")}</>}
+        <p data-totales className="mr-auto flex flex-wrap items-center gap-x-2 text-sm text-muted"
+          title={`Marítimo y aéreo juntos · marítimo ${fmt0(MV.maritimo.pedTot)} · aéreo ${fmt0(MV.aereo.pedTot)} pallets pedidos`}>
+          {tot(T.pedTot, "pedido")} {punto} {tot(T.asgTot, "asignado")} {punto} {tot(T.falta, "falta", T.falta > 0 ? "font-semibold text-warning" : "")}
+          {T.demas > 0 && <>{punto} {tot(T.demas, "de más", "font-semibold text-danger")}</>}
         </p>
         <div className="flex items-center gap-3">
           {pestana("pedido", "Pedido")}
@@ -724,19 +768,204 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
   const thFija = cabFija ? "z-[11] bg-thead lg:sticky lg:top-[var(--semanal-top)]" : "bg-thead";
   const sinPermiso = aviso === SIN_PERMISO;
   const sinCatalogo = catOk && !cat && !sinPermiso;
-  const todasAbiertas = M.bloques.length > 0 && M.bloques.every((b) => abiertas[b.esp]);
-  // Contenedores por oficina: completos + pallets sueltos (los que no alcanzan a llenar otro)
-  const contDe = (m: string) => { const q = O.cuad[m]; return q.completos ? q.necesarios : q.necesarios - 1; };
-  const sueltosDe = (m: string) => { const q = O.cuad[m]; return q.completos ? 0 : q.sobran; };
-  const contTot = O.codes.reduce((t, m) => t + contDe(m), 0);
-  const filasPie = TOTALES.filter((t) => totales[t.id]);
-  const alternarTodas = () => setAbiertas(todasAbiertas ? {} : Object.fromEntries(M.bloques.map((b) => [b.esp, true])));
+  const filasPieDe = (via: Via) => TOTALES.filter((t) => totales[t.id] && (via === "maritimo" || t.id === "pedido" || t.id === "asignado"));
   // Estado de la asignación de una especie: en texto, sin pintar las celdas del pedido
   const estadoAsig = (b: Bloque) => {
     if (b.pt === 0 && b.at === 0) return null;
     if (b.at === 0) return <span className="text-subtle">sin asignar</span>;
     if (!b.diff) return <Icon name="check" className="h-4 w-4 text-success" strokeWidth={2.5} aria-label="Asignación completa" />;
     return <span className="font-semibold text-warning">{[b.fp > 0 ? `faltan ${fmt0(b.fp)}` : "", b.fn > 0 ? `${fmt0(b.fn)} de más` : ""].filter(Boolean).join(" · ")}</span>;
+  };
+
+  // ── Una tabla Especie × Oficina para una vía ────────────────────────────────
+  const tabla = (via: Via) => {
+    const V = MV[via]; const OC = O[via]; const lista = bloquesDe(via);
+    const plegada = !!arrastre && arrastre.via === via;
+    const todasAbiertas = V.bloques.length > 0 && V.bloques.every((b) => abiertas[ak(via, b.esp)]);
+    const alternarTodas = () => setAbiertas((a) => {
+      const n = { ...a };
+      for (const b of V.bloques) { if (todasAbiertas) delete n[ak(via, b.esp)]; else n[ak(via, b.esp)] = true; }
+      return n;
+    });
+    // Contenedores por oficina (solo marítimo): completos + pallets sueltos
+    const contDe = (m: string) => { const q = OC.cuad[m]; return q.completos ? q.necesarios : q.necesarios - 1; };
+    const sueltosDe = (m: string) => { const q = OC.cuad[m]; return q.completos ? 0 : q.sobran; };
+    const contTot = O.codes.reduce((t, m) => t + contDe(m), 0);
+    const filasPie = filasPieDe(via);
+    const semanaVacia = nBloques === 0;
+    return (
+      <div className={`rounded-2xl border border-line bg-surface shadow-xs ${cabFija ? "overflow-x-auto lg:overflow-visible" : "overflow-x-auto"}`}
+        style={{ "--semanal-top": `${(full ? 0 : 56) + barH}px` } as React.CSSProperties}>
+        <table data-hoja data-via={via} aria-label={`Pedido ${VIA_INFO[via].label.toLowerCase()}`} className="w-full table-fixed text-sm" style={{ minWidth: 380 + O.codes.length * 68 }}>
+          <colgroup>
+            <col className="w-44 sm:w-60" />
+            {O.codes.map((m) => <col key={m} />)}
+            <col className="w-16" /><col className="w-28" /><col className="w-10" />
+          </colgroup>
+          <thead>
+            <tr className="text-center text-[11px] font-semibold tracking-wide text-thead-fg uppercase">
+              <th scope="col" className={`z-[12] bg-thead py-2 pr-2 pl-3 text-left align-middle sm:sticky sm:left-0 sm:pl-12 ${cabFija ? "lg:top-[var(--semanal-top)] lg:rounded-tl-2xl" : ""}`}>
+                <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  Especie
+                  {V.bloques.length > 0 && (
+                    <button type="button" onClick={alternarTodas} aria-pressed={todasAbiertas}
+                      title={todasAbiertas ? "Ocultar los proveedores de todas las especies" : "Mostrar los proveedores de todas las especies"}
+                      className="inline-flex h-6 items-center gap-1 rounded-md border border-white/40 bg-white/10 px-2 text-[11px] font-semibold tracking-normal text-thead-fg normal-case transition-colors hover:bg-white/20">
+                      <Icon name={todasAbiertas ? "chevronUp" : "chevronDown"} className="h-3 w-3" strokeWidth={2.5} />
+                      {todasAbiertas ? "Cerrar todo" : "Abrir todo"}
+                    </button>
+                  )}
+                </span>
+              </th>
+              {O.codes.map((m) => <th key={m} scope="col" data-ofi={m} title={nombreOfi(m)} className={`${thFija} px-1 py-2 align-middle`}>{m}</th>)}
+              <th scope="col" className={`${thFija} px-1 py-2 align-middle`}>Total</th>
+              <th scope="col" className={`${thFija} px-2 py-2 text-left align-middle`}>Asignación</th>
+              <th scope="col" aria-label="Acciones" className={`${thFija} ${cabFija ? "lg:rounded-tr-2xl" : ""}`} />
+            </tr>
+          </thead>
+          {via === "maritimo" && semanaVacia && (
+            <tbody>
+              <tr><td colSpan={O.codes.length + 4} className="px-6 py-10 text-center">
+                <p className="text-base font-semibold text-fg">Sin pedido para {weekShort(semana)}.</p>
+                {semanaOrigen ? <>
+                  <p className="mt-1 text-sm text-muted">Parte con las mismas especies y proveedores de {weekShort(semanaOrigen)}, marítimo y aéreo (sin cantidades), o agrega la primera especie con “+ Agregar especie”.</p>
+                  <Button className="mt-4" variant="primary" icon="duplicate" disabled={copiando} onClick={copiarEstructura}>
+                    Copiar especies y proveedores de {weekShort(semanaOrigen)}
+                  </Button>
+                </> : <p className="mt-1 text-sm text-muted">Agrega la primera especie con “+ Agregar especie”.</p>}
+              </td></tr>
+            </tbody>
+          )}
+          {lista.map((b) => {
+            const abierta = !plegada && !!abiertas[ak(via, b.esp)];
+            const movida = !!arrastre && arrastre.via === via && arrastre.esp === b.esp;
+            const bg = movida ? "bg-primary-soft" : abierta ? "bg-surface-2" : "bg-surface";
+            const bgTd = movida || abierta ? bg : "bg-surface group-hover:bg-surface-2";
+            return (
+              <tbody key={b.esp} data-esp={b.esp}>
+                <tr className={`group border-t border-line ${bg} ${movida || abierta ? "" : "hover:bg-surface-2"}`}>
+                  <td className={`z-[1] py-0.5 pr-1 pl-1 sm:sticky sm:left-0 ${bgTd}`}>
+                    <div className="flex min-w-0 items-center">
+                      {V.bloques.length > 1 ? (
+                        <button type="button" data-grip={b.esp} aria-label={`Mover ${b.esp} (flechas arriba y abajo)`} title="Arrastra para ordenar · o usa ↑ ↓"
+                          onPointerDown={(e) => iniciarArrastre(e, via, b.esp)}
+                          onKeyDown={(e) => { if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); moverBloque(via, b.esp, e.key === "ArrowUp" ? -1 : 1); } }}
+                          className={`flex h-7 w-5 shrink-0 touch-none items-center justify-center rounded-md text-subtle hover:bg-surface-3 hover:text-fg focus-visible:text-primary ${movida ? "cursor-grabbing text-primary" : "cursor-grab"}`}>
+                          <Icon name="grip" className="h-4.5 w-4.5" />
+                        </button>
+                      ) : <span className="w-5 shrink-0" />}
+                      <button type="button" data-abrir={b.esp} onClick={() => setAbiertas((a) => { const n = { ...a }; const k = ak(via, b.esp); if (n[k]) delete n[k]; else n[k] = true; return n; })}
+                        aria-expanded={abierta} title={abierta ? "Ocultar proveedores" : `Ver y editar proveedores (${b.provs.length})`}
+                        className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 pr-1 pl-0.5 text-left hover:text-primary">
+                        <Icon name={abierta ? "chevronDown" : "chevronRight"} className="h-3.5 w-3.5 shrink-0 text-subtle" strokeWidth={2.5} />
+                        <span className="truncate font-semibold text-fg" title={b.esp}>{b.esp}</span>
+                      </button>
+                    </div>
+                  </td>
+                  {O.codes.map((m) => (
+                    <td key={m} className="px-1 py-0.5">
+                      <CeldaInput value={+b.ped[m] || 0} mk={m} tono="pedido" label={`Pedido ${VIA_INFO[via].label.toLowerCase()} ${b.esp} ${nombreOfi(m)}`} onCommit={(v) => setPed(via, b.esp, m, v)} />
+                    </td>
+                  ))}
+                  <td className="px-1 text-center font-bold text-fg tabular-nums">{fmt0(b.pt)}</td>
+                  <td data-asig className="px-2 text-left text-xs whitespace-nowrap">{estadoAsig(b)}</td>
+                  <td className="text-center">
+                    <IconButton label={`Borrar ${b.esp} (${VIA_INFO[via].label.toLowerCase()}) de esta semana`} icon="trash" size="xs" tone="danger" className={AL_PASAR} onClick={() => borrarEspecie(via, b.esp)} />
+                  </td>
+                </tr>
+                {abierta && b.provs.map((n) => {
+                  const f = b.filas[n]; let t = 0;
+                  return (
+                    <tr key={n} data-prov={n} className="group border-t border-line bg-surface hover:bg-surface-2">
+                      <td className="z-[1] bg-surface py-0.5 pr-2 pl-[3.25rem] group-hover:bg-surface-2 sm:sticky sm:left-0"><span className="block truncate text-[13px] text-muted" title={n}>{n}</span></td>
+                      {O.codes.map((m) => { const v = f[m]?.cajas || 0; t += v; return (
+                        <td key={m} className="px-1 py-0.5">
+                          <CeldaInput value={v} mk={m} tono="prov" label={`${n} ${b.esp} ${nombreOfi(m)} (${VIA_INFO[via].label.toLowerCase()})`} onCommit={(x) => setCeldaAsig(via, b.esp, n, m, x)} />
+                        </td>
+                      ); })}
+                      <td className="px-1 text-center text-[13px] text-muted tabular-nums">{t ? fmt0(t) : ""}</td>
+                      <td />
+                      <td className="text-center"><IconButton label={`Quitar ${n} de ${b.esp}`} icon="x" size="xs" tone="danger" className={AL_PASAR} onClick={() => quitarProv(via, b.esp, n)} /></td>
+                    </tr>
+                  );
+                })}
+                {abierta && b.diff && b.at > 0 && (
+                  <tr data-falta className="border-t border-line bg-surface text-xs">
+                    <td className="z-[1] bg-surface py-1 pr-2 pl-[3.25rem] font-medium text-muted sm:sticky sm:left-0">Falta</td>
+                    {O.codes.map((m) => { const f = b.falta[m] || 0; return (
+                      <td key={m} title={f < 0 ? `${fmt0(-f)} asignados de más` : undefined} className="px-1 text-center font-semibold text-warning tabular-nums">
+                        {f > 0 ? fmt0(f) : f < 0 ? `+${fmt0(-f)}` : ""}
+                      </td>
+                    ); })}
+                    <td className="px-1 text-center font-semibold text-warning tabular-nums">{b.fp > 0 ? fmt0(b.fp) : ""}</td>
+                    <td colSpan={2} />
+                  </tr>
+                )}
+                {abierta && (
+                  <tr className="border-t border-line bg-surface">
+                    <td className="z-[1] bg-surface py-1.5 pr-2 pl-11 sm:sticky sm:left-0">
+                      <Combo placeholder="+ Agregar proveedor" ariaLabel={`Agregar proveedor a ${b.esp}${via === "aereo" ? " (aéreo)" : ""}`} nav="add" inputClassName={COMBO_AGREGAR}
+                        getOptions={opcionesProveedor(b.esp, b.provs)} onPick={elegirProveedor(via, b.esp)} />
+                    </td>
+                    <td colSpan={O.codes.length + 3} />
+                  </tr>
+                )}
+              </tbody>
+            );
+          })}
+          <tbody>
+            <tr className="border-t border-line bg-surface">
+              <td className={`z-[1] bg-surface py-2 pr-2 pl-6 sm:sticky sm:left-0 ${V.bloques.length && filasPie.length ? "" : "lg:rounded-bl-2xl"}`}>
+                <Combo placeholder="+ Agregar especie" ariaLabel={via === "aereo" ? "Agregar especie aérea" : "Agregar especie"} nav="add" inputClassName={COMBO_AGREGAR}
+                  getOptions={opcionesEspecie(via)} onPick={elegirEspecie(via)} />
+              </td>
+              <td colSpan={O.codes.length + 3} />
+            </tr>
+          </tbody>
+          {V.bloques.length > 0 && filasPie.length > 0 && (
+            <tfoot>
+              {filasPie.map((f, k) => (
+                <tr key={f.id} data-total={f.id} className={`text-muted ${f.id === filasPie[0].id || f.id === "contenedores" ? "border-t border-line-strong" : "border-t border-line"}`}>
+                  <td title={f.desc} className={`z-[1] bg-surface py-1.5 pr-2 pl-3 text-left font-medium sm:sticky sm:left-0 sm:pl-12 ${cabFija && k === filasPie.length - 1 ? "lg:rounded-bl-2xl" : ""}`}>{f.label}</td>
+                  {O.codes.map((m) => {
+                    const q = OC.cuad[m];
+                    if (f.id === "pedido") return <td key={m} className="px-1 text-center tabular-nums">{q.pallets ? fmt0(q.pallets) : ""}</td>;
+                    if (f.id === "asignado") return <td key={m} className="px-1 text-center tabular-nums">{OC.asg[m] ? fmt0(OC.asg[m]) : ""}</td>;
+                    if (f.id === "contenedores") return <td key={m} className="px-1 text-center font-semibold text-fg tabular-nums">{q.pallets ? contDe(m) : ""}</td>;
+                    const su = sueltosDe(m);
+                    return <td key={m} title={su ? `Faltan ${q.faltan} pallets para completar otro contenedor (de ${q.cap} pallets)` : undefined}
+                      className={`px-1 text-center tabular-nums ${su ? "font-semibold text-warning" : "text-subtle"}`}>{q.pallets ? su : ""}</td>;
+                  })}
+                  <td className={`px-1 text-center font-bold tabular-nums ${f.id === "contenedores" ? "text-fg" : ""}`}>
+                    {f.id === "pedido" ? fmt0(V.pedTot) : f.id === "asignado" ? fmt0(V.asgTot) : f.id === "contenedores" ? contTot : ""}
+                  </td>
+                  <td colSpan={2} />
+                </tr>
+              ))}
+            </tfoot>
+          )}
+        </table>
+      </div>
+    );
+  };
+
+  // Título de cada tabla: ícono, nombre y resumen
+  const tituloVia = (via: Via, extra?: React.ReactNode) => {
+    const V = MV[via];
+    return (
+      <div data-titulo-via={via} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1">
+        <span className={`grid h-7 w-7 place-items-center rounded-lg ${via === "aereo" ? "bg-sky-100 text-sky-700" : "bg-primary-soft text-primary"}`}>
+          <Icon name={VIA_INFO[via].icon} className="h-4.5 w-4.5" />
+        </span>
+        <h3 className="text-[15px] font-bold text-fg">{VIA_INFO[via].label}</h3>
+        <span className="text-[13px] text-muted">
+          {V.bloques.length
+            ? <><b className="text-fg tabular-nums">{fmt0(V.pedTot)}</b> pallets · {V.bloques.length} {V.bloques.length === 1 ? "especie" : "especies"}{V.falta > 0 && <> · <span className="font-semibold text-warning">faltan {fmt0(V.falta)}</span></>}</>
+            : "sin especies"}
+        </span>
+        {extra}
+      </div>
+    );
   };
 
   return (
@@ -755,166 +984,24 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
             </Button>
           </section>
         ) : vista === "proveedores" ? (
-          <Proveedores asig={asig} pedido={pedido} mks={mks} ordenar={ordenar} />
+          <Proveedores asig={asig} pedidos={pedidos} mks={mks} ordenar={ordenar} />
         ) : vista === "ajustes" ? (
           <Ajustes cat={C} uso={uso} saveCat={saveCat} renombrar={renombrar} unir={unir} notify={notify} />
         ) : (
           <>
-            <div className={`rounded-2xl border border-line bg-surface shadow-xs ${cabFija ? "overflow-x-auto lg:overflow-visible" : "overflow-x-auto"}`}
-              style={{ "--semanal-top": `${(full ? 0 : 56) + barH}px` } as React.CSSProperties}>
-              <table data-hoja className="w-full table-fixed text-sm" style={{ minWidth: 380 + O.codes.length * 68 }}>
-                <colgroup>
-                  <col className="w-44 sm:w-60" />
-                  {O.codes.map((m) => <col key={m} />)}
-                  <col className="w-16" /><col className="w-28" /><col className="w-10" />
-                </colgroup>
-                <thead>
-                  <tr className="text-center text-[11px] font-semibold tracking-wide text-thead-fg uppercase">
-                    <th scope="col" className={`z-[12] bg-thead py-2 pr-2 pl-3 text-left align-middle sm:sticky sm:left-0 sm:pl-12 ${cabFija ? "lg:top-[var(--semanal-top)] lg:rounded-tl-2xl" : ""}`}>
-                      <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                        Especie
-                        {M.bloques.length > 0 && (
-                          <button type="button" onClick={alternarTodas} aria-pressed={todasAbiertas}
-                            title={todasAbiertas ? "Ocultar los proveedores de todas las especies" : "Mostrar los proveedores de todas las especies"}
-                            className="inline-flex h-6 items-center gap-1 rounded-md border border-white/40 bg-white/10 px-2 text-[11px] font-semibold tracking-normal text-thead-fg normal-case transition-colors hover:bg-white/20">
-                            <Icon name={todasAbiertas ? "chevronUp" : "chevronDown"} className="h-3 w-3" strokeWidth={2.5} />
-                            {todasAbiertas ? "Cerrar todo" : "Abrir todo"}
-                          </button>
-                        )}
-                      </span>
-                    </th>
-                    {O.codes.map((m) => <th key={m} scope="col" data-ofi={m} title={nombreOfi(m)} className={`${thFija} px-1 py-2 align-middle`}>{m}</th>)}
-                    <th scope="col" className={`${thFija} px-1 py-2 align-middle`}>Total</th>
-                    <th scope="col" className={`${thFija} px-2 py-2 text-left align-middle`}>Asignación</th>
-                    <th scope="col" aria-label="Acciones" className={`${thFija} ${cabFija ? "lg:rounded-tr-2xl" : ""}`} />
-                  </tr>
-                </thead>
-                {M.bloques.length === 0 && (
-                  <tbody>
-                    <tr><td colSpan={O.codes.length + 4} className="px-6 py-10 text-center">
-                      <p className="text-base font-semibold text-fg">Sin pedido para {weekShort(semana)}.</p>
-                      {semanaOrigen ? <>
-                        <p className="mt-1 text-sm text-muted">Parte con las mismas especies y proveedores de {weekShort(semanaOrigen)} (sin cantidades) o agrega la primera especie con “+ Agregar especie”.</p>
-                        <Button className="mt-4" variant="primary" icon="duplicate" disabled={copiando} onClick={copiarEstructura}>
-                          Copiar especies y proveedores de {weekShort(semanaOrigen)}
-                        </Button>
-                      </> : <p className="mt-1 text-sm text-muted">Agrega la primera especie con “+ Agregar especie”.</p>}
-                    </td></tr>
-                  </tbody>
-                )}
-                {bloquesVista.map((b) => {
-                  const abierta = !arrastre && !!abiertas[b.esp];
-                  const movida = arrastre?.esp === b.esp;
-                  const bg = movida ? "bg-primary-soft" : abierta ? "bg-surface-2" : "bg-surface";
-                  const bgTd = movida || abierta ? bg : "bg-surface group-hover:bg-surface-2";
-                  return (
-                    <tbody key={b.esp} data-esp={b.esp}>
-                      <tr className={`group border-t border-line ${bg} ${movida || abierta ? "" : "hover:bg-surface-2"}`}>
-                        <td className={`z-[1] py-0.5 pr-1 pl-1 sm:sticky sm:left-0 ${bgTd}`}>
-                          <div className="flex min-w-0 items-center">
-                            {M.bloques.length > 1 ? (
-                              <button type="button" data-grip={b.esp} aria-label={`Mover ${b.esp} (flechas arriba y abajo)`} title="Arrastra para ordenar · o usa ↑ ↓"
-                                onPointerDown={(e) => iniciarArrastre(e, b.esp)}
-                                onKeyDown={(e) => { if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); moverBloque(b.esp, e.key === "ArrowUp" ? -1 : 1); } }}
-                                className={`flex h-7 w-5 shrink-0 touch-none items-center justify-center rounded-md text-subtle hover:bg-surface-3 hover:text-fg focus-visible:text-primary ${movida ? "cursor-grabbing text-primary" : "cursor-grab"}`}>
-                                <Icon name="grip" className="h-4.5 w-4.5" />
-                              </button>
-                            ) : <span className="w-5 shrink-0" />}
-                            <button type="button" data-abrir={b.esp} onClick={() => setAbiertas((a) => { const n = { ...a }; if (n[b.esp]) delete n[b.esp]; else n[b.esp] = true; return n; })}
-                              aria-expanded={abierta} title={abierta ? "Ocultar proveedores" : `Ver y editar proveedores (${b.provs.length})`}
-                              className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 pr-1 pl-0.5 text-left hover:text-primary">
-                              <Icon name={abierta ? "chevronDown" : "chevronRight"} className="h-3.5 w-3.5 shrink-0 text-subtle" strokeWidth={2.5} />
-                              <span className="truncate font-semibold text-fg" title={b.esp}>{b.esp}</span>
-                            </button>
-                          </div>
-                        </td>
-                        {O.codes.map((m) => (
-                          <td key={m} className="px-1 py-0.5">
-                            <CeldaInput value={+b.ped[m] || 0} mk={m} tono="pedido" label={`Pedido ${b.esp} ${nombreOfi(m)}`} onCommit={(v) => setPed(b.esp, m, v)} />
-                          </td>
-                        ))}
-                        <td className="px-1 text-center font-bold text-fg tabular-nums">{fmt0(b.pt)}</td>
-                        <td data-asig className="px-2 text-left text-xs whitespace-nowrap">{estadoAsig(b)}</td>
-                        <td className="text-center">
-                          <IconButton label={`Borrar ${b.esp} de esta semana`} icon="trash" size="xs" tone="danger" className={AL_PASAR} onClick={() => borrarEspecie(b.esp)} />
-                        </td>
-                      </tr>
-                      {abierta && b.provs.map((n) => {
-                        const f = b.filas[n]; let t = 0;
-                        return (
-                          <tr key={n} data-prov={n} className="group border-t border-line bg-surface hover:bg-surface-2">
-                            <td className="z-[1] bg-surface py-0.5 pr-2 pl-[3.25rem] group-hover:bg-surface-2 sm:sticky sm:left-0"><span className="block truncate text-[13px] text-muted" title={n}>{n}</span></td>
-                            {O.codes.map((m) => { const v = f[m]?.cajas || 0; t += v; return (
-                              <td key={m} className="px-1 py-0.5">
-                                <CeldaInput value={v} mk={m} tono="prov" label={`${n} ${b.esp} ${nombreOfi(m)}`} onCommit={(x) => setCeldaAsig(b.esp, n, m, x)} />
-                              </td>
-                            ); })}
-                            <td className="px-1 text-center text-[13px] text-muted tabular-nums">{t ? fmt0(t) : ""}</td>
-                            <td />
-                            <td className="text-center"><IconButton label={`Quitar ${n} de ${b.esp}`} icon="x" size="xs" tone="danger" className={AL_PASAR} onClick={() => quitarProv(b.esp, n)} /></td>
-                          </tr>
-                        );
-                      })}
-                      {abierta && b.diff && b.at > 0 && (
-                        <tr data-falta className="border-t border-line bg-surface text-xs">
-                          <td className="z-[1] bg-surface py-1 pr-2 pl-[3.25rem] font-medium text-muted sm:sticky sm:left-0">Falta</td>
-                          {O.codes.map((m) => { const f = b.falta[m] || 0; return (
-                            <td key={m} title={f < 0 ? `${fmt0(-f)} asignados de más` : undefined} className="px-1 text-center font-semibold text-warning tabular-nums">
-                              {f > 0 ? fmt0(f) : f < 0 ? `+${fmt0(-f)}` : ""}
-                            </td>
-                          ); })}
-                          <td className="px-1 text-center font-semibold text-warning tabular-nums">{b.fp > 0 ? fmt0(b.fp) : ""}</td>
-                          <td colSpan={2} />
-                        </tr>
-                      )}
-                      {abierta && (
-                        <tr className="border-t border-line bg-surface">
-                          <td className="z-[1] bg-surface py-1.5 pr-2 pl-11 sm:sticky sm:left-0">
-                            <Combo placeholder="+ Agregar proveedor" ariaLabel={`Agregar proveedor a ${b.esp}`} nav="add" inputClassName={COMBO_AGREGAR}
-                              getOptions={opcionesProveedor(b.esp, b.provs)} onPick={elegirProveedor(b.esp)} />
-                          </td>
-                          <td colSpan={O.codes.length + 3} />
-                        </tr>
-                      )}
-                    </tbody>
-                  );
-                })}
-                <tbody>
-                  <tr className="border-t border-line bg-surface">
-                    <td className={`z-[1] bg-surface py-2 pr-2 pl-6 sm:sticky sm:left-0 ${M.bloques.length && filasPie.length ? "" : "lg:rounded-bl-2xl"}`}>
-                      <Combo placeholder="+ Agregar especie" ariaLabel="Agregar especie" nav="add" inputClassName={COMBO_AGREGAR}
-                        getOptions={opcionesEspecie} onPick={elegirEspecie} />
-                    </td>
-                    <td colSpan={O.codes.length + 3} />
-                  </tr>
-                </tbody>
-                {M.bloques.length > 0 && filasPie.length > 0 && (
-                  <tfoot>
-                    {filasPie.map((f, k) => (
-                      <tr key={f.id} data-total={f.id} className={`text-muted ${f.id === filasPie[0].id || f.id === "contenedores" ? "border-t border-line-strong" : "border-t border-line"}`}>
-                        <td title={f.desc} className={`z-[1] bg-surface py-1.5 pr-2 pl-3 text-left font-medium sm:sticky sm:left-0 sm:pl-12 ${cabFija && k === filasPie.length - 1 ? "lg:rounded-bl-2xl" : ""}`}>{f.label}</td>
-                        {O.codes.map((m) => {
-                          const q = O.cuad[m];
-                          if (f.id === "pedido") return <td key={m} className="px-1 text-center tabular-nums">{q.pallets ? fmt0(q.pallets) : ""}</td>;
-                          if (f.id === "asignado") return <td key={m} className="px-1 text-center tabular-nums">{O.asg[m] ? fmt0(O.asg[m]) : ""}</td>;
-                          if (f.id === "contenedores") return <td key={m} className="px-1 text-center font-semibold text-fg tabular-nums">{q.pallets ? contDe(m) : ""}</td>;
-                          const su = sueltosDe(m);
-                          return <td key={m} title={su ? `Faltan ${q.faltan} pallets para completar otro contenedor (de ${q.cap} pallets)` : undefined}
-                            className={`px-1 text-center tabular-nums ${su ? "font-semibold text-warning" : "text-subtle"}`}>{q.pallets ? su : ""}</td>;
-                        })}
-                        <td className={`px-1 text-center font-bold tabular-nums ${f.id === "contenedores" ? "text-fg" : ""}`}>
-                          {f.id === "pedido" ? fmt0(M.pedTot) : f.id === "asignado" ? fmt0(M.asgTot) : f.id === "contenedores" ? contTot : ""}
-                        </td>
-                        <td colSpan={2} />
-                      </tr>
-                    ))}
-                  </tfoot>
-                )}
-              </table>
+            {tituloVia("maritimo")}
+            {tabla("maritimo")}
+            <div className="pt-4">
+              {tituloVia("aereo", (
+                <Button size="sm" variant="secondary" className="ml-auto" aria-expanded={!aereoOculto} onClick={() => setAereoOculto((v) => !v)}>
+                  {aereoOculto ? "Mostrar aéreo" : "Ocultar aéreo"}
+                </Button>
+              ))}
             </div>
-            {M.bloques.length > 0 && (
+            {!aereoOculto && tabla("aereo")}
+            {nBloques > 0 && (
               <div className="flex flex-wrap items-start justify-end gap-x-3 gap-y-2 px-1">
-                <p className="min-w-0 basis-full text-xs text-subtle sm:basis-0 sm:flex-1 sm:pt-1.5">La fila de cada especie es el pedido por oficina; ábrela para asignar proveedores. Pallets sueltos = los que no alcanzan a llenar un contenedor (21 de manzana, 20 de otras especies).</p>
+                <p className="min-w-0 basis-full text-xs text-subtle sm:basis-0 sm:flex-1 sm:pt-1.5">La fila de cada especie es el pedido por oficina; ábrela para asignar proveedores. Pallets sueltos = los que no alcanzan a llenar un contenedor (21 de manzana, 20 de otras especies); solo aplica a marítimo.</p>
                 <MenuTotales valor={totales} onChange={setTotales} />
                 <Button size="sm" variant="danger-ghost" icon="trash" onClick={borrarSemana}>Borrar semana</Button>
               </div>
