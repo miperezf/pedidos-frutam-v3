@@ -278,6 +278,8 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
   const [totales, setTotales] = useState<TotalesVis>(leerTotales);
   useEffect(() => { safeSet(TOTALES_KEY, JSON.stringify(totales)); }, [totales]);
   const [barH, setBarH] = useState(64);
+  const [vw, setVw] = useState(() => (typeof window === "undefined" ? 1366 : window.innerWidth));
+  useEffect(() => { const f = () => setVw(window.innerWidth); window.addEventListener("resize", f); return () => window.removeEventListener("resize", f); }, []);
   const barraRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = barraRef.current; if (!el) return;
@@ -735,7 +737,12 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
 
   // ── Barra de la sección ─────────────────────────────────────────────────────
   const { y } = parseWeek(semana); const anioActual = parseWeek(currentWeek()).y;
-  const ancho = full ? "max-w-none" : "max-w-6xl";
+  // Ancho: la página crece con las oficinas antes de recurrir al scroll lateral.
+  // Columnas fijas: especie 240 + total 64 + asignación 112 + acciones 40; cada oficina ≥ 54 px.
+  const necesario = 456 + O.codes.length * 54;
+  const anchoMax = full ? 0 : Math.max(1152, necesario + 96);   // 1152 px = el ancho de siempre
+  const ancho = "max-w-none";
+  const estiloAncho: React.CSSProperties | undefined = anchoMax ? { maxWidth: anchoMax } : undefined;
   const estadoGuardado = pendientes > 0
     ? <span className="inline-flex items-center gap-1 text-muted"><Spinner className="h-3 w-3" />Guardando…</span>
     : errorGuardar
@@ -753,7 +760,7 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
   );
   const barra = (
     <div ref={barraRef} className={`z-20 border-b border-line bg-bg/95 backdrop-blur md:sticky ${full ? "md:top-0" : "md:top-14"}`}>
-      <div className={`mx-auto flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2.5 sm:px-6 ${ancho}`}>
+      <div className={`mx-auto flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2.5 sm:px-6 ${ancho}`} style={estiloAncho}>
         <div className="min-w-0">
           <h2 className="text-base font-semibold text-fg">Pedidos semanales</h2>
           <p className="flex items-center gap-1.5 text-xs text-muted">{weekRange(semana)} {punto} {estadoGuardado}</p>
@@ -795,7 +802,8 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
   const inicioGrupo = new Set(grupos.slice(1).map((g) => g.codes[0]));
   const sep = (m: string) => (inicioGrupo.has(m) ? "border-l border-line" : "");
   // Encabezado de oficinas fijo al bajar (solo si la tabla cabe sin deslizar hacia el lado)
-  const cabFija = O.codes.length <= 9 || full;
+  // Encabezado fijo al bajar cuando la tabla cabe en la ventana (si no, hay scroll lateral)
+  const cabFija = necesario + 48 <= vw;
   const thFija = cabFija ? "z-[11] bg-thead lg:sticky lg:top-[var(--semanal-top)]" : "bg-thead";
   // segunda fila del encabezado (códigos) cuando arriba va la fila de empresas (22 px)
   const thFija2 = !dosEmp ? thFija : cabFija ? "z-[11] bg-thead lg:sticky lg:top-[var(--semanal-top2)]" : "bg-thead";
@@ -850,7 +858,7 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
     return (
       <div className={`rounded-2xl border border-line bg-surface shadow-xs ${cabFija ? "overflow-x-auto lg:overflow-visible" : "overflow-x-auto"}`}
         style={{ "--semanal-top": `${(full ? 0 : 56) + barH}px`, "--semanal-top2": `${(full ? 0 : 56) + barH + 22}px` } as React.CSSProperties}>
-        <table data-hoja data-via={via} aria-label={`Pedido ${VIA_INFO[via].label.toLowerCase()}`} className="w-full table-fixed text-sm" style={{ minWidth: 380 + O.codes.length * 68 }}>
+        <table data-hoja data-via={via} aria-label={`Pedido ${VIA_INFO[via].label.toLowerCase()}`} className="w-full table-fixed text-sm" style={{ minWidth: necesario }}>
           <colgroup>
             <col className="w-44 sm:w-60" />
             {O.codes.map((m) => <col key={m} />)}
@@ -1034,7 +1042,7 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       {barra}
-      <main ref={gridRef} onKeyDown={onGridKey} className={`mx-auto w-full flex-1 space-y-3 px-3 pt-4 pb-10 sm:px-6 ${ancho}`}>
+      <main ref={gridRef} onKeyDown={onGridKey} className={`mx-auto w-full flex-1 space-y-3 px-3 pt-4 pb-10 sm:px-6 ${ancho}`} style={estiloAncho}>
         {aviso && <div role="status" className="rounded-xl border border-warning-line bg-warning-soft px-4 py-3 text-sm font-semibold text-warning">{aviso}</div>}
         {cargando ? (
           <div className="space-y-3">{[0, 1].map((i) => <div key={i} className="h-40 animate-pulse rounded-2xl border border-line bg-surface" />)}</div>

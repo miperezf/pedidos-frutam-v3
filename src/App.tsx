@@ -208,7 +208,8 @@ const db = getFirestore(app);
 //        Mercados: columnas agrupadas Frutam / Polar y el mismo código permitido en las dos empresas.
 //  v59.2 Mayúsculas ordenadas en especies, proveedores y países (primera letra de cada palabra);
 //        Ajustes ofrece corregir los nombres existentes en todas las semanas.
-const APP_VERSION = "v59.2";
+//  v59.3 Con muchas oficinas la página se ensancha antes de mostrar scroll lateral.
+const APP_VERSION = "v59.3";
 const APP_VERSION_DATE = "17 Nov 2026";
 const WHATSNEW_VERSION = "v59";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;

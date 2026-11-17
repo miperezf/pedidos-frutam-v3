@@ -92,7 +92,7 @@ export default function Proveedores({ asig: asigTodas, pedidos, mks, ordenar }: 
         </span>
       </div>
       <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-xs">
-        <table className="w-full text-sm" style={{ minWidth: 320 + cols.length * (modo === "ofi" ? 64 : 92) }}>
+        <table className="w-full text-sm" style={{ minWidth: 300 + cols.length * (modo === "ofi" ? 54 : 92) }}>
           <thead>
             {dosEmp && (
               <tr className="bg-thead text-[10px] font-semibold tracking-wider text-thead-fg/70 uppercase">
