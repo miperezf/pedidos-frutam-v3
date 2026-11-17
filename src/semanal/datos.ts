@@ -17,6 +17,29 @@ export function claveMercado(visible: string, empresa: string, otros: Mercado[])
   const k = `${v}-${empresa === "Polar" ? "P" : "F"}`;
   return otros.some((m) => m.code === k) ? null : k;
 }
+// ── Mayúsculas ordenadas: cada palabra con la primera letra en mayúscula ─────
+// "manzana GALA" → "Manzana Gala" · "GaRcEs" → "Garces". Se respetan las unidades y cifras
+// ("16 kg", "7,2 kg") y los apóstrofos ("D'Anjou"). En proveedores (siglas=true) también
+// se respetan las siglas: "PFI", "VPC" (hasta 3 letras ya en mayúscula), "S.A.", "C&L".
+const UNIDADES = new Set(["kg", "g", "gr", "lb", "lbs", "ml", "cc", "lt", "lts"]);
+const capPalabra = (w: string, siglas: boolean): string => {
+  if (!w) return w;
+  const lw = w.toLocaleLowerCase("es");
+  if (UNIDADES.has(lw)) return lw;
+  if (/\d/.test(w)) return w;
+  const letras = w.replace(/[^A-Za-zÁÉÍÓÚÑÜáéíóúñü]/g, "");
+  if (siglas && /[.&]/.test(w) && letras.length <= 4) return w.toLocaleUpperCase("es");            // S.A., C&L
+  if (siglas && letras && letras === letras.toLocaleUpperCase("es") && letras.length <= 3) return w; // PFI, VPC
+  const ap = /^([A-Za-z])['’](.+)$/.exec(w);
+  if (ap) return ap[1].toUpperCase() + "'" + capPalabra(ap[2], siglas);
+  return w.charAt(0).toLocaleUpperCase("es") + w.slice(1).toLocaleLowerCase("es");
+};
+export function capitalizar(x: string, siglas = false): string {
+  return x.trim().replace(/\s+/g, " ").split(/(\s|\/|-|\()/).map((p) => (/^(\s|\/|-|\()$/.test(p) || !p ? p : capPalabra(p, siglas))).join("");
+}
+/** Para nombres de proveedores: respeta siglas (PFI, S.A.) */
+export const capitalizarProv = (x: string) => capitalizar(x, true);
+
 /** Columnas agrupadas por empresa, en el orden recibido (catálogo: Frutam y luego Polar). */
 export function gruposEmpresa(codes: string[], mks: Mercado[]): { empresa: string; codes: string[] }[] {
   const out: { empresa: string; codes: string[] }[] = [];

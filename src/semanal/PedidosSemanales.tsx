@@ -12,7 +12,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import ReactDOM from "react-dom";
 import { Icon, Button, IconButton, Spinner } from "../ui";
 import {
-  type Asig, type Catalogo, type Semana, type SemanalStore, type Via, VIAS, viaDe, pedidoDe, type Mercado, etiquetaMk, claveMercado, gruposEmpresa,
+  type Asig, type Catalogo, type Semana, type SemanalStore, type Via, VIAS, viaDe, pedidoDe, type Mercado, etiquetaMk, claveMercado, gruposEmpresa, capitalizar, capitalizarProv,
   type Cuadratura, asigId, clave, cuadrar, currentWeek, familia, FAMILIAS, fmt, fmt0, gruposDuplicados, mismoQue, parecidos,
   parseCajas, parseWeek, shiftWeek, weekId, weekRange, weekShort,
 } from "./datos";
@@ -245,7 +245,7 @@ function MenuTotales({ valor, onChange }: { valor: TotalesVis; onChange: (v: Tot
 
 // "+ Agregar especie" y "+ Agregar proveedor": borde punteado y texto oscuro para que se vean sin recargar
 const COMBO_AGREGAR = "h-8 w-full rounded-lg border border-dashed border-line-strong bg-surface px-2.5 text-[13px] font-medium text-fg placeholder:font-semibold placeholder:text-fg-2 scroll-mt-16 md:scroll-mt-44 hover:border-primary hover:placeholder:text-primary focus:border-solid focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none focus:placeholder:font-normal focus:placeholder:text-subtle";
-const mayusInicial = (x: string) => x.charAt(0).toLocaleUpperCase("es") + x.slice(1);
+const mayusInicial = capitalizar;
 
 // ══════════════════════════════════════════════════════════════════════════════
 export default function PedidosSemanales({ store, notify, onPantallaCompleta }: {
@@ -567,6 +567,28 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
     enqueue(async () => { for (const o of otros) await migrar(kind, o, keep); setAviso(""); notify("success", `${otros.map((o) => `“${o}”`).join(", ")} quedó unido con “${keep}”`); await cargarUso(); });
   };
 
+  // Nombres del catálogo con mayúsculas desordenadas → propuesta de corrección
+  const mayusPend = useMemo(() => {
+    const c = cat || VACIO; const out: { kind: Kind; from: string; to: string }[] = [];
+    for (const e of c.especies) { const t = capitalizar(e); if (t !== e) out.push({ kind: "esp", from: e, to: t }); }
+    for (const p of c.proveedores) { const t = capitalizarProv(p.nombre); if (t !== p.nombre) out.push({ kind: "prov", from: p.nombre, to: t }); }
+    for (const m of c.mercados) { const t = capitalizar(m.nombre); if (t !== m.nombre) out.push({ kind: "mk", from: m.nombre, to: t }); }
+    return out;
+  }, [cat]);
+  const corregirMayus = () => {
+    const lista = mayusPend; if (!lista.length) return;
+    for (const x of lista) {
+      if (x.kind === "mk") { saveCat((c) => { for (const m of c.mercados) if (m.nombre === x.from) m.nombre = x.to; }); continue; }
+      const nombres = x.kind === "esp" ? C.especies : C.proveedores.map((p) => p.nombre);
+      const otro = nombres.find((n) => n !== x.from && clave(n) === clave(x.to));
+      if (otro) { unir(x.kind, otro, [x.from]); continue; }   // ya existía con otra escritura: se juntan
+      if (x.kind === "esp") saveCat((c) => { const k = c.especies.indexOf(x.from); if (k >= 0) c.especies[k] = x.to; for (const p of c.proveedores) p.especies = (p.especies || []).map((e) => (e === x.from ? x.to : e)); });
+      else saveCat((c) => { const p = c.proveedores.find((y) => y.nombre === x.from); if (p) p.nombre = x.to; c.proveedores.sort((a, b) => a.nombre.localeCompare(b.nombre)); });
+      if (x.kind === "prov") setExtraProv((y) => { const z = clonar(y); for (const w of Object.values(z)) for (const e of Object.keys(w)) w[e] = w[e].map((n) => (n === x.from ? x.to : n)); return z; });
+      renombrar(x.kind, x.from, x.to);
+    }
+  };
+
   // ── Navegación con teclado en la grilla (pasa de una tabla a la otra) ───────
   const ultimaCol = useRef("");   // columna (oficina) de la última celda visitada, para ↑ ↓
   const irA = (el: Element | null | undefined) => {
@@ -699,11 +721,11 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
     const list: Opt[] = [...hits.map((v) => ({ v, hint: trabaja(v) ? `trabaja ${esp}` : undefined })), ...sim.map((v) => ({ v, hint: "parecido" }))];
     const ex = mismoQue(all, raw);
     if (ex && enBloque.includes(ex)) list.unshift({ v: ex, ya: true, hint: "ya está en esta especie" });
-    else if (raw.trim() && !ex) list.push({ v: raw.trim(), nuevo: true });
+    else if (raw.trim() && !ex) list.push({ v: capitalizarProv(raw), nuevo: true });
     return list;
   };
   const elegirProveedor = (via: Via, esp: string) => (o: Opt) => {
-    const ex = mismoQue(C.proveedores.map((p) => p.nombre), o.v); const n = ex || o.v.trim(); if (!n) return;
+    const ex = mismoQue(C.proveedores.map((p) => p.nombre), o.v); const n = ex || capitalizarProv(o.v); if (!n) return;
     const k = fk(semana, via);
     aprenderProv(n, esp);
     setExtraProv((x) => { const w = { ...(x[k] || {}) }; w[esp] = [...new Set([...(w[esp] || []), n])]; return { ...x, [k]: w }; });
@@ -1027,7 +1049,7 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
         ) : vista === "proveedores" ? (
           <Proveedores asig={asig} pedidos={pedidos} mks={mks} ordenar={ordenar} />
         ) : vista === "ajustes" ? (
-          <Ajustes cat={C} uso={uso} saveCat={saveCat} renombrar={renombrar} unir={unir} notify={notify} />
+          <Ajustes cat={C} uso={uso} saveCat={saveCat} renombrar={renombrar} unir={unir} notify={notify} mayusPend={mayusPend} corregirMayus={corregirMayus} />
         ) : (
           <>
             {tituloVia("maritimo")}
@@ -1071,9 +1093,10 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
 }
 
 // ── Ajustes: catálogo como etiquetas agrupadas (crear, editar, eliminar, unir) ─
-function Ajustes({ cat, uso, saveCat, renombrar, unir, notify }: {
+function Ajustes({ cat, uso, saveCat, renombrar, unir, notify, mayusPend, corregirMayus }: {
   cat: Catalogo; uso: Uso | null; saveCat: (m: (c: Catalogo) => void) => unknown;
   renombrar: (k: Kind, from: string, to: string) => void; unir: (k: "esp" | "prov", keep: string, otros: string[]) => void; notify: Notify;
+  mayusPend: { kind: Kind; from: string; to: string }[]; corregirMayus: () => void;
 }) {
   const [edit, setEdit] = useState<{ kind: Kind; i: number } | null>(null);
   const [agregando, setAgregando] = useState<Kind | null>(null);
@@ -1096,14 +1119,14 @@ function Ajustes({ cat, uso, saveCat, renombrar, unir, notify }: {
       setEdit(null);
       saveCat((c) => {
         const x = c.mercados.find((m) => m.code === from); if (!x) return;
-        x.code = code; x.nombre = (f.nombre || visible).trim(); x.empresa = empresa;
+        x.code = code; x.nombre = capitalizar(f.nombre || visible); x.empresa = empresa;
         if (visible !== code) x.etiqueta = visible; else delete x.etiqueta;
         c.mercados.sort((a, b) => +(a.empresa === "Polar") - +(b.empresa === "Polar"));
       });
       if (code !== from) renombrar("mk", from, code); else notify("success", "Mercado actualizado", 2000);
       return;
     }
-    const lista = kind === "esp" ? cat.especies : provNames; const from = lista[i]; const to = (f.nombre || "").trim();
+    const lista = kind === "esp" ? cat.especies : provNames; const from = lista[i]; const to = (kind === "prov" ? capitalizarProv : capitalizar)(f.nombre || "");
     if (!to) return notify("error", "Escribe el nombre.");
     const otro = lista.find((x, j) => j !== i && clave(x) === clave(to));
     setEdit(null);
@@ -1129,14 +1152,14 @@ function Ajustes({ cat, uso, saveCat, renombrar, unir, notify }: {
       const code = claveMercado(visible, empresa, cat.mercados);
       if (!code) return notify("error", `Ya existe el mercado ${visible} en ${empresa}.`);
       saveCat((c) => {
-        c.mercados.push({ code, nombre: (f.nombre || visible).trim(), empresa, ...(visible !== code ? { etiqueta: visible } : {}) });
+        c.mercados.push({ code, nombre: capitalizar(f.nombre || visible), empresa, ...(visible !== code ? { etiqueta: visible } : {}) });
         c.mercados.sort((a, b) => +(a.empresa === "Polar") - +(b.empresa === "Polar"));
       });
     } else {
-      const lista = kind === "esp" ? cat.especies : provNames; const v = (f.nombre || "").trim(); if (!v) return;
+      const lista = kind === "esp" ? cat.especies : provNames; const v = (kind === "prov" ? capitalizarProv : capitalizar)(f.nombre || ""); if (!v) return;
       const ex = mismoQue(lista, v); if (ex) return notify("info", `Ya existe como “${ex}”.`);
       const sim = parecidos(lista, v);
-      if (kind === "esp") saveCat((c) => { c.especies.push(mayusInicial(v)); });
+      if (kind === "esp") saveCat((c) => { c.especies.push(v); });
       else saveCat((c) => { c.proveedores.push({ nombre: v, especies: [] }); c.proveedores.sort((a, b) => a.nombre.localeCompare(b.nombre)); });
       notify("success", sim.length ? `${v} agregado. Ojo: se parece a “${sim[0]}”.` : `${v} agregado`, 3000);
     }
@@ -1200,8 +1223,20 @@ function Ajustes({ cat, uso, saveCat, renombrar, unir, notify }: {
   };
   const dups = [...gruposDuplicados(cat.especies).map((names) => ({ kind: "esp" as const, names })), ...gruposDuplicados(provNames).map((names) => ({ kind: "prov" as const, names }))];
 
+  const KIND_TXT: Record<Kind, string> = { esp: "especie", prov: "proveedor", mk: "país" };
   return (
     <>
+      {mayusPend.length > 0 && (
+        <section data-mayus className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border border-line bg-surface px-4 py-3 sm:px-5">
+          <Icon name="sparkles" className="h-4.5 w-4.5 shrink-0 text-primary" />
+          <p className="min-w-0 flex-1 text-sm text-fg-2">
+            <b className="font-semibold text-fg">{mayusPend.length} {mayusPend.length === 1 ? "nombre" : "nombres"} con mayúsculas desordenadas.</b>{" "}
+            <span className="text-muted">{mayusPend.slice(0, 4).map((x) => `${x.from} → ${x.to}`).join(" · ")}{mayusPend.length > 4 ? " · …" : ""}</span>
+          </p>
+          <Button size="sm" variant="secondary" onClick={corregirMayus}
+            title={mayusPend.map((x) => `${KIND_TXT[x.kind]}: ${x.from} → ${x.to}`).join("\n")}>Corregir en todas las semanas</Button>
+        </section>
+      )}
       {dups.length > 0 && (
         <section className="rounded-2xl border border-warning-line bg-warning-soft p-4 sm:px-5">
           <h3 className="text-sm font-semibold text-warning">Posibles duplicados · {dups.length}</h3>

@@ -206,7 +206,9 @@ const db = getFirestore(app);
 //        funcionamiento; contenedores solo en marítimo; filtro por vía en Proveedores).
 //  v59.1 Aéreo: sin especies no se muestra (enlace "+ Pedido aéreo"); oculto queda en una línea.
 //        Mercados: columnas agrupadas Frutam / Polar y el mismo código permitido en las dos empresas.
-const APP_VERSION = "v59.1";
+//  v59.2 Mayúsculas ordenadas en especies, proveedores y países (primera letra de cada palabra);
+//        Ajustes ofrece corregir los nombres existentes en todas las semanas.
+const APP_VERSION = "v59.2";
 const APP_VERSION_DATE = "17 Nov 2026";
 const WHATSNEW_VERSION = "v59";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
