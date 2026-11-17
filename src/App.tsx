@@ -204,7 +204,9 @@ const db = getFirestore(app);
 //  v58.10 "Copiar especies y proveedores" también toma una semana armada sin cantidades todavía.
 //  v59.0 Pedidos semanales separado en dos tablas: Marítimo y Aéreo (mismo catálogo y mismo
 //        funcionamiento; contenedores solo en marítimo; filtro por vía en Proveedores).
-const APP_VERSION = "v59.0";
+//  v59.1 Aéreo: sin especies no se muestra (enlace "+ Pedido aéreo"); oculto queda en una línea.
+//        Mercados: columnas agrupadas Frutam / Polar y el mismo código permitido en las dos empresas.
+const APP_VERSION = "v59.1";
 const APP_VERSION_DATE = "17 Nov 2026";
 const WHATSNEW_VERSION = "v59";
 const WHATSNEW_KEY = `frutam_whatsnew_${WHATSNEW_VERSION}`;
@@ -4176,7 +4178,7 @@ ${cuerpoCorreoHtml(previewGlobalId, innerPreviewHtml)}
       >
         <ul className="space-y-4">
           {[
-            { icon: "plane", title: "Marítimo y aéreo", desc: "En Pedidos semanales el pedido se arma en dos tablas, una para marítimo y otra para aéreo, con el mismo funcionamiento. Los contenedores se calculan solo en marítimo y en Proveedores puedes filtrar por vía." },
+            { icon: "plane", title: "Marítimo y aéreo", desc: "En Pedidos semanales el pedido marítimo y el aéreo van en tablas separadas, con el mismo funcionamiento. «+ Pedido aéreo» abre la tabla aérea cuando la necesitas. Las oficinas se agrupan por Frutam y Polar." },
             { icon: "menu", title: "Menú de secciones", desc: "El botón ☰ de arriba a la izquierda abre el menú para pasar entre Pedidos por Mail ID y la nueva sección Pedidos semanales." },
             { icon: "table", title: "Pedidos semanales", desc: "Una tabla por semana: en la fila de cada especie digitas el pedido por oficina y, al abrirla, asignas los pallets a cada proveedor. Cada cambio se guarda al momento." },
             { icon: "duplicate", title: "Partir desde la semana anterior", desc: "En una semana vacía puedes copiar las especies y proveedores de la última semana con datos, sin cantidades." },

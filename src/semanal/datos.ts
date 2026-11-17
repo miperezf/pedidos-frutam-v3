@@ -3,7 +3,30 @@
 // lógica se prueba con un almacenamiento en memoria y en la app usa Firestore
 // (ver ./firestore.ts).
 
-export type Mercado = { code: string; nombre: string; empresa: string };
+/** code = clave interna única (la que usan pedidos y asignaciones). etiqueta = código que se
+ *  muestra, solo cuando difiere de code (p. ej. COL de Polar guardado como "COL-P" porque
+ *  Frutam ya usa "COL"). */
+export type Mercado = { code: string; nombre: string; empresa: string; etiqueta?: string };
+export const etiquetaMk = (m: Pick<Mercado, "code" | "etiqueta">) => m.etiqueta || m.code;
+/** Clave interna para un mercado nuevo o editado: el código visible si está libre; si otra
+ *  empresa ya lo usa, código + "-F"/"-P". null si ese código ya existe en la misma empresa. */
+export function claveMercado(visible: string, empresa: string, otros: Mercado[]): string | null {
+  const v = visible.trim().toUpperCase();
+  if (otros.some((m) => (m.empresa || "Frutam") === empresa && etiquetaMk(m) === v)) return null;
+  if (!otros.some((m) => m.code === v)) return v;
+  const k = `${v}-${empresa === "Polar" ? "P" : "F"}`;
+  return otros.some((m) => m.code === k) ? null : k;
+}
+/** Columnas agrupadas por empresa, en el orden recibido (catálogo: Frutam y luego Polar). */
+export function gruposEmpresa(codes: string[], mks: Mercado[]): { empresa: string; codes: string[] }[] {
+  const out: { empresa: string; codes: string[] }[] = [];
+  for (const c of codes) {
+    const e = mks.find((m) => m.code === c)?.empresa || "Otros";
+    const g = out[out.length - 1];
+    if (g && g.empresa === e) g.codes.push(c); else out.push({ empresa: e, codes: [c] });
+  }
+  return out;
+}
 export type Proveedor = { nombre: string; especies: string[] };
 export type Catalogo = { especies: string[]; mercados: Mercado[]; proveedores: Proveedor[] };
 /** pedido[especie][mercado] = pallets (el campo de las asignaciones se llama "cajas" por historia) */

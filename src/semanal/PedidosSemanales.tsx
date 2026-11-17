@@ -12,7 +12,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import ReactDOM from "react-dom";
 import { Icon, Button, IconButton, Spinner } from "../ui";
 import {
-  type Asig, type Catalogo, type Semana, type SemanalStore, type Via, VIAS, viaDe, pedidoDe,
+  type Asig, type Catalogo, type Semana, type SemanalStore, type Via, VIAS, viaDe, pedidoDe, type Mercado, etiquetaMk, claveMercado, gruposEmpresa,
   type Cuadratura, asigId, clave, cuadrar, currentWeek, familia, FAMILIAS, fmt, fmt0, gruposDuplicados, mismoQue, parecidos,
   parseCajas, parseWeek, shiftWeek, weekId, weekRange, weekShort,
 } from "./datos";
@@ -304,6 +304,8 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
   }, [extraEsp, extraProv]);
   const [copiando, setCopiando] = useState(false);
   const [aereoOculto, setAereoOculto] = useState(() => safeGet(AEREO_OCULTO_KEY) === "1");
+  // Sin especies aéreas la tabla no se muestra; "+ Pedido aéreo" la abre (solo para esta semana)
+  const [aereoAbierto, setAereoAbierto] = useState(false);
   useEffect(() => { safeSet(AEREO_OCULTO_KEY, aereoOculto ? "1" : "0"); }, [aereoOculto]);
   const [pendientes, setPendientes] = useState(0);
   const [errorGuardar, setErrorGuardar] = useState(false);
@@ -337,7 +339,7 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
     return () => { clearTimeout(t); u1(); u2(); };
   }, [store]);
   useEffect(() => {
-    setAsig([]); setAsigOk(false); safeSet(SEMANA_KEY, semana);
+    setAsig([]); setAsigOk(false); safeSet(SEMANA_KEY, semana); setAereoAbierto(false);
     return store.subAsig(semana, (a) => { setAsig(a); setAsigOk(true); },
       (e) => { console.error(e); setAsigOk(true); setAviso(motivo(e, "No se pudieron leer las asignaciones de esta semana.")); });
   }, [store, semana]);
@@ -762,10 +764,19 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
   );
 
   const cargando = !catOk || !semOk || (vista !== "ajustes" && !asigOk);
-  const nombreOfi = (c: string) => mks.find((m) => m.code === c)?.nombre || c;
+  const mkDe = (c: string): Mercado | undefined => mks.find((m) => m.code === c);
+  const etq = (c: string) => { const m = mkDe(c); return m ? etiquetaMk(m) : c; };
+  const nombreOfi = (c: string) => { const m = mkDe(c); return m ? `${m.nombre}${m.empresa === "Polar" ? " (Polar)" : ""}` : c; };
+  // Columnas agrupadas por empresa: si hay de las dos, encabezado de dos filas y una línea suave entre grupos
+  const grupos = gruposEmpresa(O.codes, mks);
+  const dosEmp = grupos.length > 1;
+  const inicioGrupo = new Set(grupos.slice(1).map((g) => g.codes[0]));
+  const sep = (m: string) => (inicioGrupo.has(m) ? "border-l border-line" : "");
   // Encabezado de oficinas fijo al bajar (solo si la tabla cabe sin deslizar hacia el lado)
   const cabFija = O.codes.length <= 9 || full;
   const thFija = cabFija ? "z-[11] bg-thead lg:sticky lg:top-[var(--semanal-top)]" : "bg-thead";
+  // segunda fila del encabezado (códigos) cuando arriba va la fila de empresas (22 px)
+  const thFija2 = !dosEmp ? thFija : cabFija ? "z-[11] bg-thead lg:sticky lg:top-[var(--semanal-top2)]" : "bg-thead";
   const sinPermiso = aviso === SIN_PERMISO;
   const sinCatalogo = catOk && !cat && !sinPermiso;
   const filasPieDe = (via: Via) => TOTALES.filter((t) => totales[t.id] && (via === "maritimo" || t.id === "pedido" || t.id === "asignado"));
@@ -793,9 +804,30 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
     const contTot = O.codes.reduce((t, m) => t + contDe(m), 0);
     const filasPie = filasPieDe(via);
     const semanaVacia = nBloques === 0;
+    const rs = (dos: boolean) => (dos ? { rowSpan: 2 } : {});
+    const thEspecie = (dos: boolean) => (
+      <th scope="col" {...rs(dos)} className={`z-[12] bg-thead py-2 pr-2 pl-3 text-left align-middle text-[11px] tracking-wide sm:sticky sm:left-0 sm:pl-12 ${cabFija ? "lg:top-[var(--semanal-top)] lg:rounded-tl-2xl" : ""}`}>
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          Especie
+          {V.bloques.length > 0 && (
+            <button type="button" onClick={alternarTodas} aria-pressed={todasAbiertas}
+              title={todasAbiertas ? "Ocultar los proveedores de todas las especies" : "Mostrar los proveedores de todas las especies"}
+              className="inline-flex h-6 items-center gap-1 rounded-md border border-white/40 bg-white/10 px-2 text-[11px] font-semibold tracking-normal text-thead-fg normal-case transition-colors hover:bg-white/20">
+              <Icon name={todasAbiertas ? "chevronUp" : "chevronDown"} className="h-3 w-3" strokeWidth={2.5} />
+              {todasAbiertas ? "Cerrar todo" : "Abrir todo"}
+            </button>
+          )}
+        </span>
+      </th>
+    );
+    const thFinales = (dos: boolean) => <>
+      <th scope="col" {...rs(dos)} className={`${thFija} px-1 py-2 align-middle text-[11px] tracking-wide`}>Total</th>
+      <th scope="col" {...rs(dos)} className={`${thFija} px-2 py-2 text-left align-middle text-[11px] tracking-wide`}>Asignación</th>
+      <th scope="col" {...rs(dos)} aria-label="Acciones" className={`${thFija} ${cabFija ? "lg:rounded-tr-2xl" : ""}`} />
+    </>;
     return (
       <div className={`rounded-2xl border border-line bg-surface shadow-xs ${cabFija ? "overflow-x-auto lg:overflow-visible" : "overflow-x-auto"}`}
-        style={{ "--semanal-top": `${(full ? 0 : 56) + barH}px` } as React.CSSProperties}>
+        style={{ "--semanal-top": `${(full ? 0 : 56) + barH}px`, "--semanal-top2": `${(full ? 0 : 56) + barH + 22}px` } as React.CSSProperties}>
         <table data-hoja data-via={via} aria-label={`Pedido ${VIA_INFO[via].label.toLowerCase()}`} className="w-full table-fixed text-sm" style={{ minWidth: 380 + O.codes.length * 68 }}>
           <colgroup>
             <col className="w-44 sm:w-60" />
@@ -803,24 +835,25 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
             <col className="w-16" /><col className="w-28" /><col className="w-10" />
           </colgroup>
           <thead>
+            {dosEmp && (
+              <tr data-empresas className="text-center text-[10px] font-semibold tracking-wider text-thead-fg/70 uppercase">
+                {thEspecie(true)}
+                {grupos.map((g) => (
+                  <th key={g.empresa + g.codes[0]} scope="colgroup" colSpan={g.codes.length}
+                    className={`${thFija} h-[22px] px-1 pt-1.5 pb-0 align-bottom leading-none ${inicioGrupo.has(g.codes[0]) ? "border-l border-white/25" : ""}`}>
+                    {g.empresa}
+                  </th>
+                ))}
+                {thFinales(true)}
+              </tr>
+            )}
             <tr className="text-center text-[11px] font-semibold tracking-wide text-thead-fg uppercase">
-              <th scope="col" className={`z-[12] bg-thead py-2 pr-2 pl-3 text-left align-middle sm:sticky sm:left-0 sm:pl-12 ${cabFija ? "lg:top-[var(--semanal-top)] lg:rounded-tl-2xl" : ""}`}>
-                <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                  Especie
-                  {V.bloques.length > 0 && (
-                    <button type="button" onClick={alternarTodas} aria-pressed={todasAbiertas}
-                      title={todasAbiertas ? "Ocultar los proveedores de todas las especies" : "Mostrar los proveedores de todas las especies"}
-                      className="inline-flex h-6 items-center gap-1 rounded-md border border-white/40 bg-white/10 px-2 text-[11px] font-semibold tracking-normal text-thead-fg normal-case transition-colors hover:bg-white/20">
-                      <Icon name={todasAbiertas ? "chevronUp" : "chevronDown"} className="h-3 w-3" strokeWidth={2.5} />
-                      {todasAbiertas ? "Cerrar todo" : "Abrir todo"}
-                    </button>
-                  )}
-                </span>
-              </th>
-              {O.codes.map((m) => <th key={m} scope="col" data-ofi={m} title={nombreOfi(m)} className={`${thFija} px-1 py-2 align-middle`}>{m}</th>)}
-              <th scope="col" className={`${thFija} px-1 py-2 align-middle`}>Total</th>
-              <th scope="col" className={`${thFija} px-2 py-2 text-left align-middle`}>Asignación</th>
-              <th scope="col" aria-label="Acciones" className={`${thFija} ${cabFija ? "lg:rounded-tr-2xl" : ""}`} />
+              {!dosEmp && thEspecie(false)}
+              {O.codes.map((m) => (
+                <th key={m} scope="col" data-ofi={m} title={`${mkDe(m)?.nombre || m}${mkDe(m) ? ` · ${mkDe(m)!.empresa}` : ""}`}
+                  className={`${thFija2} px-1 py-2 align-middle ${inicioGrupo.has(m) ? "border-l border-white/25" : ""}`}>{etq(m)}</th>
+              ))}
+              {!dosEmp && thFinales(false)}
             </tr>
           </thead>
           {via === "maritimo" && semanaVacia && (
@@ -863,7 +896,7 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                     </div>
                   </td>
                   {O.codes.map((m) => (
-                    <td key={m} className="px-1 py-0.5">
+                    <td key={m} className={`px-1 py-0.5 ${sep(m)}`}>
                       <CeldaInput value={+b.ped[m] || 0} mk={m} tono="pedido" label={`Pedido ${VIA_INFO[via].label.toLowerCase()} ${b.esp} ${nombreOfi(m)}`} onCommit={(v) => setPed(via, b.esp, m, v)} />
                     </td>
                   ))}
@@ -879,7 +912,7 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                     <tr key={n} data-prov={n} className="group border-t border-line bg-surface hover:bg-surface-2">
                       <td className="z-[1] bg-surface py-0.5 pr-2 pl-[3.25rem] group-hover:bg-surface-2 sm:sticky sm:left-0"><span className="block truncate text-[13px] text-muted" title={n}>{n}</span></td>
                       {O.codes.map((m) => { const v = f[m]?.cajas || 0; t += v; return (
-                        <td key={m} className="px-1 py-0.5">
+                        <td key={m} className={`px-1 py-0.5 ${sep(m)}`}>
                           <CeldaInput value={v} mk={m} tono="prov" label={`${n} ${b.esp} ${nombreOfi(m)} (${VIA_INFO[via].label.toLowerCase()})`} onCommit={(x) => setCeldaAsig(via, b.esp, n, m, x)} />
                         </td>
                       ); })}
@@ -893,7 +926,7 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                   <tr data-falta className="border-t border-line bg-surface text-xs">
                     <td className="z-[1] bg-surface py-1 pr-2 pl-[3.25rem] font-medium text-muted sm:sticky sm:left-0">Falta</td>
                     {O.codes.map((m) => { const f = b.falta[m] || 0; return (
-                      <td key={m} title={f < 0 ? `${fmt0(-f)} asignados de más` : undefined} className="px-1 text-center font-semibold text-warning tabular-nums">
+                      <td key={m} title={f < 0 ? `${fmt0(-f)} asignados de más` : undefined} className={`px-1 text-center font-semibold text-warning tabular-nums ${sep(m)}`}>
                         {f > 0 ? fmt0(f) : f < 0 ? `+${fmt0(-f)}` : ""}
                       </td>
                     ); })}
@@ -929,12 +962,12 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
                   <td title={f.desc} className={`z-[1] bg-surface py-1.5 pr-2 pl-3 text-left font-medium sm:sticky sm:left-0 sm:pl-12 ${cabFija && k === filasPie.length - 1 ? "lg:rounded-bl-2xl" : ""}`}>{f.label}</td>
                   {O.codes.map((m) => {
                     const q = OC.cuad[m];
-                    if (f.id === "pedido") return <td key={m} className="px-1 text-center tabular-nums">{q.pallets ? fmt0(q.pallets) : ""}</td>;
-                    if (f.id === "asignado") return <td key={m} className="px-1 text-center tabular-nums">{OC.asg[m] ? fmt0(OC.asg[m]) : ""}</td>;
-                    if (f.id === "contenedores") return <td key={m} className="px-1 text-center font-semibold text-fg tabular-nums">{q.pallets ? contDe(m) : ""}</td>;
+                    if (f.id === "pedido") return <td key={m} className={`px-1 text-center tabular-nums ${sep(m)}`}>{q.pallets ? fmt0(q.pallets) : ""}</td>;
+                    if (f.id === "asignado") return <td key={m} className={`px-1 text-center tabular-nums ${sep(m)}`}>{OC.asg[m] ? fmt0(OC.asg[m]) : ""}</td>;
+                    if (f.id === "contenedores") return <td key={m} className={`px-1 text-center font-semibold text-fg tabular-nums ${sep(m)}`}>{q.pallets ? contDe(m) : ""}</td>;
                     const su = sueltosDe(m);
                     return <td key={m} title={su ? `Faltan ${q.faltan} pallets para completar otro contenedor (de ${q.cap} pallets)` : undefined}
-                      className={`px-1 text-center tabular-nums ${su ? "font-semibold text-warning" : "text-subtle"}`}>{q.pallets ? su : ""}</td>;
+                      className={`px-1 text-center tabular-nums ${sep(m)} ${su ? "font-semibold text-warning" : "text-subtle"}`}>{q.pallets ? su : ""}</td>;
                   })}
                   <td className={`px-1 text-center font-bold tabular-nums ${f.id === "contenedores" ? "text-fg" : ""}`}>
                     {f.id === "pedido" ? fmt0(V.pedTot) : f.id === "asignado" ? fmt0(V.asgTot) : f.id === "contenedores" ? contTot : ""}
@@ -947,6 +980,14 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
         </table>
       </div>
     );
+  };
+
+  // Aéreo: se muestra si tiene especies o si se abrió con "+ Pedido aéreo"
+  const hayAereo = MV.aereo.bloques.length > 0;
+  const conAereo = hayAereo || aereoAbierto;
+  const abrirAereo = () => {
+    setAereoAbierto(true); setAereoOculto(false);
+    setTimeout(() => irA(gridRef.current?.querySelector('input[aria-label="Agregar especie aérea"]')), 60);
   };
 
   // Título de cada tabla: ícono, nombre y resumen
@@ -991,21 +1032,37 @@ export default function PedidosSemanales({ store, notify, onPantallaCompleta }: 
           <>
             {tituloVia("maritimo")}
             {tabla("maritimo")}
-            <div className="pt-4">
-              {tituloVia("aereo", (
-                <Button size="sm" variant="secondary" className="ml-auto" aria-expanded={!aereoOculto} onClick={() => setAereoOculto((v) => !v)}>
-                  {aereoOculto ? "Mostrar aéreo" : "Ocultar aéreo"}
-                </Button>
-              ))}
-            </div>
-            {!aereoOculto && tabla("aereo")}
-            {nBloques > 0 && (
-              <div className="flex flex-wrap items-start justify-end gap-x-3 gap-y-2 px-1">
-                <p className="min-w-0 basis-full text-xs text-subtle sm:basis-0 sm:flex-1 sm:pt-1.5">La fila de cada especie es el pedido por oficina; ábrela para asignar proveedores. Pallets sueltos = los que no alcanzan a llenar un contenedor (21 de manzana, 20 de otras especies); solo aplica a marítimo.</p>
-                <MenuTotales valor={totales} onChange={setTotales} />
-                <Button size="sm" variant="danger-ghost" icon="trash" onClick={borrarSemana}>Borrar semana</Button>
+            {conAereo && (aereoOculto && hayAereo ? (
+              // Aéreo oculto: una sola línea con su resumen
+              <div data-aereo-oculto className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-dashed border-line-strong px-3 py-2 text-[13px] text-muted">
+                <Icon name="plane" className="h-4 w-4 text-sky-700" />
+                <b className="font-semibold text-fg-2">Aéreo</b> · <b className="text-fg tabular-nums">{fmt0(MV.aereo.pedTot)}</b> pallets
+                {MV.aereo.falta > 0 && <> · <span className="font-semibold text-warning">faltan {fmt0(MV.aereo.falta)}</span></>}
+                <button type="button" onClick={() => setAereoOculto(false)} className="ml-auto rounded-md px-2 py-0.5 text-xs font-semibold text-primary hover:bg-primary-soft">Mostrar</button>
               </div>
-            )}
+            ) : <>
+              <div className="pt-4">
+                {tituloVia("aereo", (
+                  <Button size="sm" variant="secondary" className="ml-auto" aria-expanded onClick={() => (hayAereo ? setAereoOculto(true) : setAereoAbierto(false))}>
+                    Ocultar aéreo
+                  </Button>
+                ))}
+              </div>
+              {tabla("aereo")}
+            </>)}
+            <div className="flex flex-wrap items-start justify-end gap-x-3 gap-y-2 px-1">
+              {!conAereo && (
+                <button type="button" data-agregar-aereo onClick={abrirAereo}
+                  className="-ml-1 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-[13px] font-semibold text-sky-700 transition-colors hover:bg-sky-50">
+                  <Icon name="plane" className="h-4 w-4" />+ Pedido aéreo
+                </button>
+              )}
+              <p className="min-w-0 basis-full text-xs text-subtle sm:basis-0 sm:flex-1 sm:pt-1.5">
+                {nBloques > 0 ? "La fila de cada especie es el pedido por oficina; ábrela para asignar proveedores. Pallets sueltos = los que no alcanzan a llenar un contenedor (21 de manzana, 20 de otras especies); solo aplica a marítimo." : ""}
+              </p>
+              {nBloques > 0 && <MenuTotales valor={totales} onChange={setTotales} />}
+              {nBloques > 0 && <Button size="sm" variant="danger-ghost" icon="trash" onClick={borrarSemana}>Borrar semana</Button>}
+            </div>
           </>
         )}
       </main>
@@ -1026,17 +1083,23 @@ function Ajustes({ cat, uso, saveCat, renombrar, unir, notify }: {
 
   const abrir = (kind: Kind, i: number) => {
     setAgregando(null); setEdit({ kind, i });
-    if (kind === "mk") { const m = cat.mercados[i]; setF({ code: m.code, nombre: m.nombre, empresa: m.empresa || "Frutam" }); }
+    if (kind === "mk") { const m = cat.mercados[i]; setF({ code: etiquetaMk(m), nombre: m.nombre, empresa: m.empresa || "Frutam" }); }
     else setF({ nombre: kind === "esp" ? cat.especies[i] : cat.proveedores[i].nombre });
   };
   const guardar = () => {
     if (!edit) return; const { kind, i } = edit;
     if (kind === "mk") {
-      const from = cat.mercados[i].code; const code = (f.code || "").trim().toUpperCase();
-      if (!code) return notify("error", "Escribe el código.");
-      if (cat.mercados.some((m, j) => j !== i && m.code === code)) return notify("error", `Ya existe el mercado ${code}.`);
+      const from = cat.mercados[i].code; const visible = (f.code || "").trim().toUpperCase(); const empresa = f.empresa || "Frutam";
+      if (!visible) return notify("error", "Escribe el código.");
+      const code = claveMercado(visible, empresa, cat.mercados.filter((_, j) => j !== i));
+      if (!code) return notify("error", `Ya existe el mercado ${visible} en ${empresa}.`);
       setEdit(null);
-      saveCat((c) => { const x = c.mercados.find((m) => m.code === from); if (!x) return; x.code = code; x.nombre = (f.nombre || code).trim(); x.empresa = f.empresa || "Frutam"; c.mercados.sort((a, b) => +(a.empresa === "Polar") - +(b.empresa === "Polar")); });
+      saveCat((c) => {
+        const x = c.mercados.find((m) => m.code === from); if (!x) return;
+        x.code = code; x.nombre = (f.nombre || visible).trim(); x.empresa = empresa;
+        if (visible !== code) x.etiqueta = visible; else delete x.etiqueta;
+        c.mercados.sort((a, b) => +(a.empresa === "Polar") - +(b.empresa === "Polar"));
+      });
       if (code !== from) renombrar("mk", from, code); else notify("success", "Mercado actualizado", 2000);
       return;
     }
@@ -1062,9 +1125,13 @@ function Ajustes({ cat, uso, saveCat, renombrar, unir, notify }: {
   };
   const agregar = (kind: Kind) => {
     if (kind === "mk") {
-      const code = (f.code || "").trim().toUpperCase(); if (!code) return;
-      if (cat.mercados.some((m) => m.code === code)) return notify("error", `Ya existe el mercado ${code}.`);
-      saveCat((c) => { c.mercados.push({ code, nombre: (f.nombre || code).trim(), empresa: f.empresa || "Frutam" }); c.mercados.sort((a, b) => +(a.empresa === "Polar") - +(b.empresa === "Polar")); });
+      const visible = (f.code || "").trim().toUpperCase(); if (!visible) return; const empresa = f.empresa || "Frutam";
+      const code = claveMercado(visible, empresa, cat.mercados);
+      if (!code) return notify("error", `Ya existe el mercado ${visible} en ${empresa}.`);
+      saveCat((c) => {
+        c.mercados.push({ code, nombre: (f.nombre || visible).trim(), empresa, ...(visible !== code ? { etiqueta: visible } : {}) });
+        c.mercados.sort((a, b) => +(a.empresa === "Polar") - +(b.empresa === "Polar"));
+      });
     } else {
       const lista = kind === "esp" ? cat.especies : provNames; const v = (f.nombre || "").trim(); if (!v) return;
       const ex = mismoQue(lista, v); if (ex) return notify("info", `Ya existe como “${ex}”.`);
@@ -1094,7 +1161,7 @@ function Ajustes({ cat, uso, saveCat, renombrar, unir, notify }: {
       <Button size="sm" variant="primary" onClick={guardar}>Guardar</Button>
       <Button size="sm" variant="secondary" onClick={() => setEdit(null)}>Cancelar</Button>
       <Button size="sm" variant="danger-ghost" icon="trash" onClick={eliminar}>Eliminar</Button>
-      <span className="px-1 text-xs text-muted">{usoTxt(kind, nombre)}</span>
+      <span className="px-1 text-xs text-muted">{usoTxt(kind, kind === "mk" && edit ? cat.mercados[edit.i]?.code ?? nombre : nombre)}</span>
     </span>
   );
   const chip = (kind: Kind, i: number, label: string, sub?: string) =>
@@ -1150,7 +1217,7 @@ function Ajustes({ cat, uso, saveCat, renombrar, unir, notify }: {
       <p className="text-sm text-muted">Toca una etiqueta para editarla o eliminarla. Los cambios de nombre se aplican también en las semanas guardadas.</p>
       {seccion("mk", "Mercados", cat.mercados.length,
         agrupar(cat.mercados.map((m, i) => ({ m, i })), (x) => x.m.empresa || "Sin empresa", ["Frutam", "Polar"])
-          .map(([g, xs]) => grupo(g, xs.map(({ m, i }) => chip("mk", i, m.code, m.nombre)))))}
+          .map(([g, xs]) => grupo(g, xs.map(({ m, i }) => chip("mk", i, etiquetaMk(m), m.nombre)))))}
       {seccion("esp", "Especies", cat.especies.length,
         agrupar(cat.especies.map((e, i) => ({ e, i })), (x) => familia(x.e), [...FAMILIAS.map((x) => x[0]), "Otras"])
           .map(([g, xs]) => grupo(g, xs.map(({ e, i }) => chip("esp", i, e)))))}
